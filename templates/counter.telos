@@ -1,0 +1,7 @@
+module Counter {
+    invariant Counter { value >= 0 }
+    func increment(c: Counter, by: PositiveInt)
+        requires c.value >= 0
+        ensures c.value == old(c.value) + by
+    { mutate state { c.value += by } }
+}

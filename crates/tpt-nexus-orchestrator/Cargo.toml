@@ -1,0 +1,39 @@
+[package]
+name = "tpt-nexus-orchestrator"
+description = "Agentic INTENT -> VERIFY -> ATTEST orchestration loop over the tpt-telos SDK, with a fully observable iteration log"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+# Forwarded to the telos SDK: enables the LLM-backed `CodeAgent`.
+llm = ["tpt-telos-sdk/llm"]
+# Forwarded to the telos SDK: enables the optional Z3 solver backend.
+z3 = ["tpt-telos-sdk/z3"]
+
+[dependencies]
+# The single orchestration entry point over parse -> transpile -> codegen -> attest.
+tpt-telos-sdk.workspace = true
+
+# Three symbols the SDK does not (yet) re-export. Kept as explicit path deps
+# rather than vendored copies so the types stay identical to the SDK's:
+#   * tpt-telos-agent  -> `render_candidate`, for per-iteration source history
+#   * tpt-telos-parser -> `ast::{Stmt, Expr}`, to derive whether a function
+#                         mutates state (which becomes an Archon `Right`)
+#   * tpt-telos-codegen -> `proof::to_json`, to write `telos-proof.json`
+# See README.md "Upstream gaps" — closing these would let nexus depend on the
+# SDK alone.
+tpt-telos-agent.workspace = true
+tpt-telos-parser.workspace = true
+tpt-telos-codegen.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

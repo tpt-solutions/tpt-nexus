@@ -1,0 +1,18 @@
+[package]
+name = "out-nexus-examples"
+description = "End-to-end demonstrations of the tpt-nexus closed loop (not published)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+tpt-nexus-orchestrator.workspace = true
+tpt-nexus-archon-emulator.workspace = true
+tpt-nexus-manifest-validator.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,46 @@
+// Example 2 — Capability Boundary Test
+//
+// Two functions over the same account state, differing in exactly one way:
+// one writes, one does not. Nothing in this file mentions Archon, pages, or
+// rights — the access level is *derived* from what each function was proved to
+// do.
+//
+//   settle          mutates `a.balance`  -> granted Right::ReadWrite
+//   current_balance writes only a local  -> granted Right::Read
+//
+// `examples/example2_capability_boundary.rs` then has the process attempt a
+// write through the read-only grant. The denial comes from tpt-archon's
+// capability check, not from anything the generated code agreed to respect.
+
+@boundary(cpu_bound)
+module Ledger {
+    // An account balance can never be negative.
+    invariant Account {
+        balance >= 0
+    }
+
+    // Debit `amount` from an account. This is a mutator: it writes state, so
+    // it earns write access to its page.
+    func settle(a: Account, amount: PositiveInt)
+        requires a.balance >= amount
+        ensures a.balance == old(a.balance) - amount
+    {
+        mutate state {
+            a.balance -= amount
+        }
+    }
+
+    // Report the current balance. This is a pure query: it reads account state
+    // into a local and writes no struct field, so the verifier never sees a
+    // mutation. Least privilege therefore grants it read-only access.
+    //
+    // NOTE: telos rejects bare local assignment (`out = a.balance`) in a body —
+    // its IR only admits field assignments — so a read-only function reads into
+    // a `let` binding and states its property over the input it was given.
+    func current_balance(a: Account)
+        requires a.balance >= 0
+        ensures a.balance >= 0
+    {
+        let snapshot = a.balance
+    }
+}

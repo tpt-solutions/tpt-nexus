@@ -1,0 +1,28 @@
+[package]
+name = "tpt-nexus-manifest-validator"
+description = "Independent validation of tpt-telos proof manifests: source-hash integrity and manifest tamper detection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "nexus-validate-manifest"
+path = "src/main.rs"
+
+[dependencies]
+# `verify_manifest` / `ManifestVerification` live in codegen; the telos SDK
+# re-exports `ProofManifest` but not the verification entry point (see
+# README.md "Upstream gaps").
+tpt-telos-codegen.workspace = true
+
+[dev-dependencies]
+# Tests build real manifests by running the genuine pipeline rather than
+# hand-writing JSON fixtures, so they cannot drift from the manifest format.
+tpt-telos-parser.workspace = true
+tpt-telos-agent.workspace = true

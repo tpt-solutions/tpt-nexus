@@ -1,0 +1,151 @@
+tpt-nexus
+Status: Draft v1.0
+Authors: TPT Solutions Engineering
+Dependencies: tpt-telos (specifically telos-sdk), tpt-archon (specifically tpt-archon-bridge traits)
+1. Executive Summary
+tpt-nexus is an integration workspace, orchestration harness, and proof-of-concept runtime. It is not a new compiler, language, or microkernel. Rather, it is the "glue" layer that proves the closed-loop viability of the TPT Triad: demonstrating that an AI agent can generate intent (tpt-telos), have it mathematically verified and cryptographically attested (tpt-eidos/telos-sdk), and safely execute it within a capability-based, zero-copy environment (tpt-archon).
+2. Motivation & Problem Statement
+Currently, the TPT ecosystem consists of highly specialized, isolated tools:
+Telos verifies contracts and routes code.
+Eidos provides the hardcore mathematical foundation.
+Archon provides the execution environment and storage engine.
+The Gap: There is no unified environment that demonstrates the lifecycle of a proof. How does an AI agent actually consume the telos-sdk? How does the resulting telos-proof.json manifest actually translate into an Archon capability grant? Without a harness to prove this end-to-end flow, the architecture remains theoretical. tpt-nexus closes this gap.
+3. Core Design Principles
+Zero-Trust AI Input: The AI agent's output is treated as hostile, untrusted bytecode until it passes the telos-sdk verification and produces a valid cryptographic manifest.
+Manifest as Root of Trust: Execution in the Archon emulator is strictly gated by the presence and validity of the telos-proof.json manifest. No manifest = no capability grants.
+Emulation over Implementation: tpt-nexus does not reimplement the Archon microkernel. It implements a user-space emulator of the Archon capability and page-table mechanics to prove the API design works without requiring bare-metal hardware or complex hypervisor setups.
+Observable Agentic State: The AI feedback loop must be fully observable. Every iteration of the agent's code, every failure, and every counterexample must be logged to reconstruct the "thought process" of the agent.
+4. Architecture & Component Design
+The repository is structured as a Rust workspace containing the orchestration engine, the Archon emulator, and the demo examples.
+4.1. Component: nexus-orchestrator (The Agentic Loop)
+This module manages the lifecycle of the AI agent. It does not contain the LLM logic itself (to remain model-agnostic), but it defines the strict interface the LLM must conform to.
+AgentContext: Holds the current state of the generation, including the source code history, the target architecture, and the accumulated VerificationReports.
+FeedbackFormatter: Takes the raw VerificationReport from telos-sdk and formats it into a strict system prompt for the LLM. It explicitly highlights the counterexample and the agent_hint.
+LoopController: Manages the retry logic. It enforces a maximum iteration count (e.g., 5 attempts) to prevent infinite loops if the LLM is fundamentally incapable of satisfying the contract.
+4.2. Component: nexus-archon-emulator (The Capability Runtime)
+This is the most critical technical component. It simulates the tpt-archon-bridge traits in user-space to prove the zero-copy capability model.
+CSlotTable (Capability Slot Table): Simulates the kernel's capability store. When the orchestrator passes a verified manifest to the emulator, the emulator "mints" a capability token (a u64 index into this table).
+EmulatedPageTable: Simulates virtual memory. It maps "virtual" addresses requested by the user-space code to "physical" byte arrays held in the emulator's memory.
+ZeroCopyExecutor: Implements the CapabilityGrant trait. When user-space code requests access to a database row, the executor checks the CSlotTable, verifies the access level (ReadOnly vs ReadWrite), and returns a MemoryView (a raw pointer and length) that bypasses serialization.
+4.3. Component: nexus-manifest-validator
+A lightweight utility that reads a telos-proof.json file, recomputes the SHA-256 hash of the associated .telos source file, and ensures they match. This proves the code wasn't altered after verification.
+5. Data Flow & State Machine
+The execution of a Nexus task follows a strict, unidirectional state machine:
+[1. INTENT] AI generates v1.telos
+      │
+      ▼
+[2. VERIFY] nexus-orchestrator calls telos-sdk
+      │
+      ├──(FAIL)──> [3. FEEDBACK] Format VerificationReport -> AI generates v2.telos -> (Loop back to 2)
+      │
+      ▼ (SUCCESS)
+[4. ATTEST] telos-sdk emits telos-proof.json (contains SHA-256 hash)
+      │
+      ▼
+[5. VALIDATE] nexus-manifest-validator checks hash integrity
+      │
+      ▼
+[6. MINT] nexus-archon-emulator reads manifest, mints CSlot capabilities
+      │
+      ▼
+[7. EXECUTE] User-space code runs, calls CapabilityGrant::map_page(), 
+             receives zero-copy MemoryView, processes data.
+
+6. Interface Definitions (Key Rust APIs)
+6.1. The Orchestrator API
+rust
+pub struct NexusOrchestrator {
+    telos_pipeline: telos_sdk::Pipeline,
+    max_retries: usize,
+}
+
+impl NexusOrchestrator {
+    /// Runs the agentic loop. 
+    /// `llm_client` is a trait object allowing injection of any LLM backend.
+    pub async fn run_agent_loop(
+        &self,
+        initial_prompt: &str,
+        llm_client: &dyn LlmClient,
+    ) -> Result<VerifiedArtifact, NexusError>;
+}
+
+/// The final output of a successful agentic loop.
+pub struct VerifiedArtifact {
+    pub compiled_binary: Vec<u8>, // The compiled Rust/Go code
+    pub manifest: telos_sdk::Manifest, // The cryptographic proof
+    pub source_code: String, // The final, verified .telos source
+}
+
+6.2. The Archon Emulator API
+/// The user-space emulator of the Archon Microkernel.
+pub struct ArchonEmulator {
+    cslots: Vec<CapabilityToken>,
+    page_table: EmulatedPageTable,
+    memory_pool: Vec<u8>, // The "physical" memory
+}
+
+impl ArchonEmulator {
+    /// Ingests a verified artifact and sets up the capability environment.
+    pub fn load_artifact(&mut self, artifact: &VerifiedArtifact) -> Result<ProcessId, NexusError>;
+
+    /// Simulates a syscall from the user-space process.
+    pub fn handle_syscall(
+        &mut self, 
+        pid: ProcessId, 
+        request: SyscallRequest
+    ) -> Result<SyscallResponse, NexusError>;
+}
+7. Security & Threat Model
+Even though tpt-nexus is a harness, it must enforce the security boundaries we intend to build into the real Archon kernel.
+Threat
+Mitigation in tpt-nexus
+AI Hallucination / Logic Bug
+Caught by telos-sdk Fourier-Motzkin solver. Code is never compiled if contracts fail.
+Post-Compilation Tampering
+Mitigated by nexus-manifest-validator. The SHA-256 hash in the manifest must match the source code exactly.
+Capability Forgery
+The CSlotTable in the emulator is private. User-space code can only interact with capabilities via the opaque u64 tokens provided by the emulator.
+Out-of-Bounds Memory Access
+The EmulatedPageTable enforces strict bounds checking on every MemoryView access, simulating the hardware MMU / kernel page-table checks.
+8. Testing & Validation Strategy
+tpt-nexus will include an examples/ directory containing end-to-end test cases.
+Example 1: The Monotonic Timestamp Query
+Goal: Prove the agent can write a time-series aggregation function.
+Contract: requires: timestamps are strictly increasing. ensures: memory usage < 4MB.
+Expected Behavior: The AI will likely fail on the first attempt by not handling out-of-order timestamps. The FeedbackFormatter will feed the counterexample back to the AI. The AI will add a sorting/checking step. The second attempt will pass, and the emulator will successfully execute it.
+Example 2: The Capability Boundary Test
+Goal: Prove the Archon emulator correctly denies unauthorized access.
+Scenario: The compiled code attempts to write to a ReadOnly capability.
+Expected Behavior: The ArchonEmulator intercepts the syscall, checks the CSlotTable, sees the ReadOnly flag, and returns an ArchonError::CapabilityViolation.
+9. Future Work (Out of Scope for v1.0)
+Real Hardware Execution: Moving from the user-space emulator to actual bare-metal execution on an ARM64 board using the real tpt-archon kernel.
+Distributed Capabilities: Extending the capability model across network boundaries (e.g., passing a capability token via gRPC to another node).
+Eidos Deep Integration: Currently, Nexus relies on Telos's QF_LRA solver. Future versions will allow the agent to emit .eidos files for deeply complex dependent-type proofs that exceed Telos's scope.
+
+10. Reconciliation Notes (implemented reality vs. this draft)
+This draft (v1.0) described a *simulated* Archon (CSlotTable, EmulatedPageTable,
+MemoryView via raw pointers). The implemented tpt-nexus diverged because
+tpt-archon gained usable real crates and tpt-telos shipped `tpt-telos-sdk`.
+Recorded here so the spec and the code do not silently drift:
+
+- Emulation -> real Archon. §4.2's CSlotTable/EmulatedPageTable are NOT
+  reimplemented. `tpt-nexus-archon-emulator` runs over the live
+  `tpt-archon-core` (`CorePageCache`/`BufferPool`/`InMemoryBlockDevice`) and
+  `tpt-archon-bridge` (`Capability`, `CapabilityIssuer`). Enforcement is
+  archon's own `CacheError::Denied`, not a hand-rolled check.
+- Capabilities are real, not u64 tokens. §7's "opaque u64 tokens" and the
+  CSlotTable are replaced by `tpt_archon_bridge::capability::Capability` (an
+  unforgeable bearer token; fields private, no `Debug`). Nexus retains the
+  tokens so it can `revoke` them on termination.
+- Grant policy is derived from the proof, not inferred from a global flag.
+  One page capability per verified function; the right is `ReadWrite` iff the
+  accepted body writes a struct field, else `Read`. (See AGENTS.md invariants.)
+- Agent is `StaticAgent` (offline synthesis), not an LLM. §4.1's `LlmClient`
+  is a stretch goal behind a feature flag; the loop/feedback design is model
+  agnostic and already exercised by `StaticAgent`.
+- Examples match §8 except Example 1's contract was simplified to a monotonicity
+  check that genuinely needs a repair (out-of-order input) to make the
+  fail-then-fix loop observable without an LLM.
+- Validation (§5 step 5) uses `tpt-telos-codegen::proof::verify_manifest`,
+  re-deriving the source and manifest hashes; it distinguishes a tampered
+  manifest (manifest_hash mismatch) from a wrong source (source_hash mismatch).

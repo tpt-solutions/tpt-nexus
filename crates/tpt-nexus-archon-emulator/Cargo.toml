@@ -1,0 +1,30 @@
+[package]
+name = "tpt-nexus-archon-emulator"
+description = "User-space process and syscall framing over the tpt-archon capability microkernel, gated on tpt-telos proof manifests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+tpt-archon-core.workspace = true
+tpt-archon-bridge.workspace = true
+tpt-archon-kernel.workspace = true
+# Used to detect cross-module function-name collisions before minting grants.
+tpt-telos-parser.workspace = true
+
+# [6. MINT] consumes the output of [4. ATTEST] ...
+tpt-nexus-orchestrator.workspace = true
+# ... but only after [5. VALIDATE] re-checks it. Loading an artifact
+# re-verifies its manifest rather than trusting the in-memory value.
+tpt-nexus-manifest-validator.workspace = true
+
+tracing.workspace = true
+
+[dev-dependencies]
+tpt-telos-sdk.workspace = true

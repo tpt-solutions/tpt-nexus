@@ -1,0 +1,7 @@
+module Ledger {
+    invariant Account { balance >= 0 }
+    func settle(a: Account, amount: PositiveInt)
+        requires a.balance >= amount
+        ensures a.balance == old(a.balance) - amount
+    { mutate state { a.balance -= amount } }
+}

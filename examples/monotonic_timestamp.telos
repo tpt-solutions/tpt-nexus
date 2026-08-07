@@ -1,0 +1,47 @@
+// Example 1 — Monotonic Timestamp Query
+//
+// A time-series aggregation window. Two properties matter, and both are stated
+// as contracts rather than comments:
+//
+//   * timestamps arrive strictly increasing  -> `requires next_ts > prev_ts`
+//   * the window stays under 4 MiB           -> `ensures w.bytes <= 4194304`
+//
+// The body below is WRONG on purpose: it charges 32 bytes per sample when the
+// contract says 16. That is not a contrived failure — it is the single most
+// common class of bug in aggregation code (a stride that does not match the
+// record layout), and it is exactly the kind of thing a code-generating agent
+// gets wrong.
+//
+// Running this through `tpt-nexus-orchestrator` shows the loop notice the
+// violation, receive a concrete counterexample, and repair the body. See
+// `examples/example1_monotonic_timestamp.rs`.
+
+@boundary(cpu_bound)
+module TimeSeries {
+    // A window can never hold a negative number of samples, and can never
+    // occupy negative memory.
+    invariant Window {
+        sample_count >= 0
+        bytes >= 0
+    }
+
+    // Append one sample to the aggregation window.
+    //
+    // `prev_ts` / `next_ts` are the previous and incoming timestamps; the
+    // precondition is what "strictly increasing" means formally. The 4194288
+    // bound is 4 MiB minus one 16-byte record: the largest window that can
+    // still accept a sample without breaching the cap.
+    func append_sample(w: Window, prev_ts: Int, next_ts: Int)
+        requires next_ts > prev_ts
+        requires w.bytes >= 0
+        requires w.bytes <= 4194288
+        ensures w.sample_count == old(w.sample_count) + 1
+        ensures w.bytes == old(w.bytes) + 16
+        ensures w.bytes <= 4194304
+    {
+        mutate state {
+            w.sample_count += 1
+            w.bytes += 32
+        }
+    }
+}

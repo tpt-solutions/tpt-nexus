@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tpt-nexus-orchestrator",
+    "crates/tpt-nexus-manifest-validator",
+    "crates/tpt-nexus-archon-emulator",
+    "crates/tpt-nexus-cli",
+    "crates/out-nexus-examples",
+]
+# Crate naming convention, inherited from the sibling `tpt-telos` / `tpt-archon`
+# workspaces: crates intended for crates.io are prefixed `tpt-nexus-`; crates
+# that exist only to demonstrate or exercise the others are prefixed
+# `out-nexus-` so publish intent is visible from the directory name alone,
+# rather than from a `publish = false` line buried in a Cargo.toml.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+authors = ["TPT Solutions"]
+repository = "https://github.com/tpt-solutions/tpt-nexus"
+homepage = "https://github.com/tpt-solutions/tpt-nexus"
+keywords = ["verification", "capabilities", "integration", "formal-methods"]
+categories = ["development-tools", "simulation"]
+
+[workspace.dependencies]
+# --- sibling TPT repos, consumed as path dependencies -----------------------
+#
+# `tpt-nexus` exists to prove that *today's* `tpt-telos` and `tpt-archon`
+# integrate, so it deliberately builds against the working trees next to it
+# rather than against published crates.io releases. Both siblings are pre-1.0
+# and changing weekly; pinning to a published version would prove that an old
+# snapshot integrates, which is not the question this repo answers.
+#
+# `tpt-archon-bridge` / `-kernel` are not published at all yet, so path deps
+# are required there regardless of preference.
+#
+# This assumes the three repos are checked out as siblings:
+#   <parent>/tpt-telos
+#   <parent>/tpt-archon
+#   <parent>/tpt-nexus     <-- you are here
+tpt-telos-sdk = { path = "../tpt-telos/crates/tpt-telos-sdk" }
+tpt-telos-agent = { path = "../tpt-telos/crates/tpt-telos-agent" }
+tpt-telos-codegen = { path = "../tpt-telos/crates/tpt-telos-codegen" }
+tpt-telos-parser = { path = "../tpt-telos/crates/tpt-telos-parser" }
+tpt-archon-core = { path = "../tpt-archon/crates/tpt-archon-core" }
+tpt-archon-bridge = { path = "../tpt-archon/crates/tpt-archon-bridge" }
+tpt-archon-kernel = { path = "../tpt-archon/crates/tpt-archon-kernel" }
+
+# --- internal ---------------------------------------------------------------
+tpt-nexus-orchestrator = { path = "crates/tpt-nexus-orchestrator", version = "0.1.0" }
+tpt-nexus-manifest-validator = { path = "crates/tpt-nexus-manifest-validator", version = "0.1.0" }
+tpt-nexus-archon-emulator = { path = "crates/tpt-nexus-archon-emulator", version = "0.1.0" }
+tpt-nexus-cli = { path = "crates/tpt-nexus-cli", version = "0.1.0" }
+
+# --- third party ------------------------------------------------------------
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[profile.release]
+opt-level = 3

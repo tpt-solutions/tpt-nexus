@@ -1,0 +1,11 @@
+module KV {
+    invariant Store { size >= 0, size <= capacity }
+    func put(k: Store, v: Int)
+        requires k.size < k.capacity
+        ensures k.size == old(k.size) + 1
+    { mutate state { k.size += 1 } }
+    func get(k: Store)
+        requires k.size >= 0
+        ensures k.size >= 0
+    { let s = k.size }
+}

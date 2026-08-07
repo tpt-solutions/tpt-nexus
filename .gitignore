@@ -1,0 +1,7 @@
+/target
+# Scratch output from the examples: generated Rust/Go projects, proof
+# manifests, and JSON-lines run logs.
+/out
+/gen
+/gen-project
+*.jsonl

@@ -1,0 +1,7 @@
+module Oracle {
+    invariant Price { price >= 0 }
+    func latest(p: Price)
+        requires p.price >= 0
+        ensures p.price >= 0
+    { let snapshot = p.price }
+}

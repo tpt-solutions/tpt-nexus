@@ -1,0 +1,7 @@
+module RateLimiter {
+    invariant Bucket { count >= 0, count <= capacity }
+    func allow(b: Bucket)
+        requires b.count < b.capacity
+        ensures b.count == old(b.count) + 1
+    { mutate state { b.count += 1 } }
+}
