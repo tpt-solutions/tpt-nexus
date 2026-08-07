@@ -5,13 +5,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use tpt_archon_bridge::capability::{Capability, CapabilityIssuer, Resource, Right, SharedIssuer};
-use tpt_telos_parser::ast::Item;
 use tpt_archon_bridge::page_cache::{CacheError, CorePageCache};
 use tpt_archon_core::block::{InMemoryBlockDevice, StorageError};
 use tpt_archon_core::page::{BufferPool, Page, PAGE_SIZE};
 use tpt_archon_kernel::memory::UnifiedMemory;
 use tpt_archon_kernel::scheduler::Scheduler;
 use tpt_nexus_orchestrator::VerifiedArtifact;
+use tpt_telos_parser::ast::Item;
 
 use crate::error::ArchonError;
 use crate::process::{page_resource, ArtifactTask, Grant, Process, ProcessId};
@@ -221,14 +221,17 @@ impl ArchonEmulator {
 
         // Which functions write state? Derived from the accepted body by the
         // orchestrator. Single source of truth shared with `nexus verify`/`diff`.
-        let rights = derive_rights(&artifact)?;
+        let rights = derive_rights(artifact)?;
 
         // [6. MINT] One page capability per verified function.
         let mut grants = Vec::new();
         for func_name in artifact.manifest.functions.keys() {
             let block_id = self.allocate_block()?;
 
-            let right = rights.get(func_name.as_str()).copied().unwrap_or(Right::Read);
+            let right = rights
+                .get(func_name.as_str())
+                .copied()
+                .unwrap_or(Right::Read);
             let capability = self
                 .issuer
                 .borrow_mut()
@@ -514,9 +517,7 @@ impl ArchonEmulator {
 /// than one module is ambiguous and refused. Shared by `load_artifact` and
 /// the `tpt-nexus-cli` `verify`/`diff` commands so the derivation can never
 /// drift between runtime and reporting.
-pub fn derive_rights(
-    artifact: &VerifiedArtifact,
-) -> Result<BTreeMap<String, Right>, ArchonError> {
+pub fn derive_rights(artifact: &VerifiedArtifact) -> Result<BTreeMap<String, Right>, ArchonError> {
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for module in &artifact.telos.modules {
         for item in &module.items {
@@ -575,6 +576,7 @@ pub fn page_of(block_id: u64) -> Resource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assert_grants;
     use tpt_nexus_orchestrator::{NexusOrchestrator, StaticAgent};
 
     /// A two-function program: one mutator (writes state) and one read-only
@@ -618,6 +620,19 @@ mod tests {
     }
 
     #[test]
+    fn assert_grants_macro_catches_the_derived_rights() {
+        let mut emulator = ArchonEmulator::new();
+        let pid = emulator.load_artifact(&artifact(TWO_FUNCS)).unwrap();
+
+        // One line pins the whole capability surface, derived from what each
+        // function was proved to do.
+        assert_grants!(emulator, pid, {
+            "settle" => Right::ReadWrite,
+            "read"   => Right::Read,
+        });
+    }
+
+    #[test]
     fn pages_are_recycled_after_terminate() {
         let mut emulator = ArchonEmulator::new();
         let first = emulator.load_artifact(&artifact(TWO_FUNCS)).unwrap();
@@ -645,22 +660,104 @@ mod tests {
         assert_eq!(second_pages, vec![0, 1], "terminated pages are reused");
     }
 
+    /// A simple single-function program, used for the negative-path tests.
+    const SINGLE_FUNC: &str = r#"
+        module C {
+            invariant Counter { value >= 0 }
+            func increment(c: Counter, by: PositiveInt)
+                requires c.value >= 0
+                ensures c.value == old(c.value) + by
+            { mutate state { c.value += by } }
+        }
+    "#;
+
+    /// A manifest whose source no longer matches it must be refused at mint time,
+    /// never trusted because the artifact happens to be in memory and "verified".
+    #[test]
+    fn tampered_source_is_rejected_at_mint() {
+        let mut artifact = artifact(SINGLE_FUNC);
+        // The attacker edits the source after attestation, but leaves the
+        // manifest (and its recorded source hash) untouched.
+        artifact.source_code = artifact.source_code.replace("+ by", "- by");
+
+        let mut emulator = ArchonEmulator::new();
+        match emulator.load_artifact(&artifact) {
+            Err(ArchonError::InvalidAttestation(why)) => {
+                assert!(
+                    why.contains("source") || why.contains("manifest"),
+                    "reason should name the tamper: {why}"
+                );
+            }
+            other => panic!("expected InvalidAttestation, got {other:?}"),
+        }
+        assert_eq!(emulator.process_count(), 0, "nothing was minted");
+    }
+
+    /// A manifest edited in place (its own `manifest_hash` no longer holds) is
+    /// also refused — this is the "someone rewrote the attestation" attack.
+    #[test]
+    fn tampered_manifest_is_rejected_at_mint() {
+        let mut emulator = ArchonEmulator::new();
+        let mut tampered = artifact(SINGLE_FUNC);
+        // `to_json` serializes `manifest_hash` verbatim (it does not recompute),
+        // so overwriting the field corrupts the document-level hash check.
+        tampered.manifest.manifest_hash =
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string();
+        match emulator.load_artifact(&tampered) {
+            Err(ArchonError::InvalidAttestation(why)) => {
+                assert!(
+                    why.contains("manifest"),
+                    "reason should name the tamper: {why}"
+                );
+            }
+            other => panic!("expected InvalidAttestation, got {other:?}"),
+        }
+    }
+
+    /// After a process is terminated and its capabilities revoked, the same
+    /// program (same function name, same page) can be admitted again — re-mint,
+    /// not a permanent ban. Exercises the free-list reuse + fresh issuer serial.
+    #[test]
+    fn process_can_be_readmitted_after_revoke() {
+        let mut emulator = ArchonEmulator::new();
+        let a = emulator.load_artifact(&artifact(SINGLE_FUNC)).unwrap();
+        emulator.terminate(a).unwrap();
+        assert!(emulator.process(a).is_none());
+
+        let b = emulator.load_artifact(&artifact(SINGLE_FUNC)).unwrap();
+        assert_ne!(a, b, "re-admission gets a fresh process id");
+        assert!(emulator.process(b).is_some());
+        assert_eq!(emulator.process_count(), 1);
+
+        // The re-admitted process holds a capability that actually works.
+        let page = emulator.process(b).unwrap().page_of("increment").unwrap();
+        let ok = emulator.handle_syscall(
+            b,
+            SyscallRequest::WritePage {
+                block_id: page,
+                data: b"value=5".to_vec(),
+            },
+        );
+        assert!(ok.is_ok(), "re-admitted capability should service syscalls");
+    }
+
     #[test]
     fn ambiguous_function_name_is_rejected() {
         let mut emulator = ArchonEmulator::new();
-        match NexusOrchestrator::new().run_agent_loop(COLLIDING_NAMES, &StaticAgent::new()) {
-            // telos accepted the collision (manifest collapsed it): nexus must
-            // refuse to mint rather than under-grant one of them.
-            Ok(artifact) => assert!(
+        // telos accepted the collision (manifest collapsed it): nexus must
+        // refuse to mint rather than under-grant one of them. If telos itself
+        // rejected/panicked on the collision, the guard is belt-and-suspenders
+        // and the test is vacuously satisfied.
+        if let Ok(artifact) =
+            NexusOrchestrator::new().run_agent_loop(COLLIDING_NAMES, &StaticAgent::new())
+        {
+            assert!(
                 matches!(
                     emulator.load_artifact(&artifact),
                     Err(ArchonError::AmbiguousFunctionName(_))
                 ),
                 "a name shared across modules must be rejected"
-            ),
-            // telos itself rejected/panicked on the collision: the guard is
-            // belt-and-suspenders and the test is vacuously satisfied.
-            Err(_) => {}
+            );
         }
     }
 }

@@ -124,7 +124,7 @@ Do **not** "fix" nexus code to match the spec's literal names — update
 
 ## 9. Stretch / later
 
-- [ ] Swap `StaticAgent` for `tpt_telos_agent::llm_agent::LlmAgent` behind an env var/flag once ready to demo against a real LLM provider (already supports OpenAI/Anthropic/Ollama/OpenRouter/Grok — no new plumbing needed on telos's side)
+- [x] Swap `StaticAgent` for `tpt_telos_agent::llm_agent::LlmAgent` behind an env var/flag once ready to demo against a real LLM provider (already supports OpenAI/Anthropic/Ollama/OpenRouter/Grok — no new plumbing needed on telos's side). In nexus: `NEXUS_AGENT=llm` selects it at runtime behind the `llm` feature; `nexus.toml` `agent = "llm"` selects it from policy.
 - [x] Revisit whether `tpt-archon-kernel`'s existing "user-space first, already implemented" status changes the "why an emulator" framing in the spec (see §0 last row)
 
 ---
@@ -151,10 +151,11 @@ examples. Grouped by kind; the "Bugs" block is being fixed this session.
   is keyed by bare function name, so two same-named functions in different modules
   merge into one grant and `page_of("name")` becomes ambiguous. Fix: detect
   duplicate function names at load time and return a descriptive `ArchonError`.
-- [ ] **`BuildPolicy::Compile` is dead in practice.** The real-compile path
+- [x] **`BuildPolicy::Compile` is dead in practice.** The real-compile path
   (`orchestrator.rs:334-360`) has no test or example, and default `Headless` makes
   Example 2 print `image_bytes = 0`. Fix: add a toolchain-gated test (or a third
   example using `with_build_policy(Compile)`) so the path can't silently rot.
+  → `tests::compile_policy_produces_real_artifact_bytes` plus `example3_compiled_artifact`.
 - [x] **telos panics escape `run_agent_loop`.** Resolved: `run_agent_loop` now
   wraps `tpt_telos_sdk::compile` in `std::panic::catch_unwind` and returns
   `NexusError::Panic` with a hint (`orchestrator.rs`). Note: as of the latest
@@ -164,44 +165,47 @@ examples. Grouped by kind; the "Bugs" block is being fixed this session.
 
 ### 10.2 Missing features
 
-- [ ] **Top-level `nexus verify` CLI** running the whole loop (only
-  `nexus-validate-manifest` exists today). Should accept `*.telos`, print the
-  capability table, and exit non-zero on unverified — the CI entrypoint.
-- [ ] **`nexus.toml` policy config**: explicit function→page mapping, right
-  overrides (force `Read` for a risky mutator), agent selection. Today the
-  derivation is fully automatic.
-- [ ] **Emulator negative-path tests**: tampered manifest → `InvalidAttestation`;
-  re-admission after `revoke`.
+- [x] **Top-level `nexus verify` CLI** running the whole loop (only
+   `nexus-validate-manifest` exists today). Should accept `*.telos`, print the
+   capability table, and exit non-zero on unverified — the CI entrypoint.
+   → `tpt-nexus-cli` `verify` (with `--compile` and `--policy`).
+- [x] **`nexus.toml` policy config**: explicit function→page mapping, right
+   overrides (force `Read` for a risky mutator), agent selection. Today the
+   derivation is fully automatic. → `tpt-nexus-cli::policy`, `verify --policy`.
+- [x] **Emulator negative-path tests**: tampered manifest → `InvalidAttestation`;
+   re-admission after `revoke`. → `emulator.rs` `tampered_source_is_rejected_at_mint`,
+   `tampered_manifest_is_rejected_at_mint`, `process_can_be_readmitted_after_revoke`.
 
 ### 10.3 Innovations
 
-- [ ] **Capability diff / security-regression detection** — `nexus diff a.telos b.telos`
-  renders the delta in the derived grant set (new `ReadWrite` on a page = supply-chain
-  alert). Highest-value, most differentiating idea.
-- [ ] **Signed attestations (ed25519)** — a hash proves manifest↔source match, but
-  anyone can re-attest after editing. A signed manifest makes attestation
-  tamper-*evident*, not just checkable.
-- [ ] **Policy-as-code + PR comment** — emit the capability table as Markdown; a
-  GitHub Action posts it on PRs.
-- [ ] **Reasoning-trace as HTML/Markdown** — render the counterexample→fix loop
-  (already in `RunLog`) into a shareable artifact for trust/demos.
-- [ ] **`assert_grants!` macro** so users write policy tests against their own
-  `.telos` without hand-rolling the emulator.
+- [x] **Capability diff / security-regression detection** — `nexus diff a.telos b.telos`
+   renders the delta in the derived grant set (new `ReadWrite` on a page = supply-chain
+   alert). Highest-value, most differentiating idea.
+- [x] **Signed attestations (ed25519)** — a hash proves manifest↔source match, but
+   anyone can re-attest after editing. A signed manifest makes attestation
+   tamper-*evident*, not just checkable. → `tpt-nexus-cli::signing`, `nexus sign`.
+- [x] **Policy-as-code + PR comment** — emit the capability table as Markdown; a
+   GitHub Action posts it on PRs. → `nexus verify` table + `.github/actions/nexus-verify`.
+- [x] **Reasoning-trace as HTML/Markdown** — render the counterexample→fix loop
+   (already in `RunLog`) into a shareable artifact for trust/demos.
+   → `tpt-nexus-cli::trace`, `nexus trace`.
+- [x] **`assert_grants!` macro** so users write policy tests against their own
+   `.telos` without hand-rolling the emulator. → `tpt-nexus-archon-emulator`.
 
 ### 10.4 Usability / automation / adoption
 
-- [ ] **Starter template gallery** under `templates/`: `counter`, `ledger`,
-  `rate-limiter`, `oracle`, `kv-store` — each a minimal, already-verified `.telos`
-  plus a `nexus.toml`. New users copy one and go.
-- [ ] **`nexus new <name>`** scaffolding that clones a template + writes config.
-- [ ] **`nexus watch examples/`** dev loop (re-verify on save).
-- [ ] **Composite GitHub Action** + pre-commit hook (`fmt`+`clippy`) in a `justfile`.
-- [ ] **Compatibility matrix test** pinning `../tpt-telos` + `../tpt-archon` and
-  running the e2e test on each bump.
-- [ ] **Docs**: README "Quickstart", a "how grants are derived" diagram, and a
-  note on the read-only `.telos` story (a bare-local read verifies and is derived
-  as `Read`; only a struct-field write earns `ReadWrite`).
-- [ ] **Third example showing `Compile`** so `image_bytes > 0` and the "compiled
-  artifact" claim is visually demonstrated.
+- [x] **Starter template gallery** under `templates/`: `counter`, `ledger`,
+   `rate-limiter`, `oracle`, `kv-store` — each a minimal, already-verified `.telos`
+   plus a `nexus.toml`. New users copy one and go.
+- [x] **`nexus new <name>`** scaffolding that clones a template + writes config.
+- [x] **`nexus watch examples/`** dev loop (re-verify on save).
+- [x] **Composite GitHub Action** + pre-commit hook (`fmt`+`clippy`) in a `justfile`.
+- [x] **Compatibility matrix test** pinning `../tpt-telos` + `../tpt-archon` and
+   running the e2e test on each bump.
+- [x] **Docs**: README "Quickstart", a "how grants are derived" diagram, and a
+   note on the read-only `.telos` story (a bare-local read verifies and is derived
+   as `Read`; only a struct-field write earns `ReadWrite`).
+- [x] **Third example showing `Compile`** so `image_bytes > 0` and the "compiled
+   artifact" claim is visually demonstrated.
 
 

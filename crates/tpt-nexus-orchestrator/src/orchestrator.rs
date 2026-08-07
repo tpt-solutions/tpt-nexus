@@ -643,6 +643,33 @@ mod tests {
         );
     }
 
+    /// Keep the [`BuildPolicy::Compile`] path honest. It shells out to `cargo`
+    /// to actually compile the generated Rust crate; the generated project has
+    /// no external dependencies, so this stays hermetic and offline. Without a
+    /// test like this the Compile branch (and `image_bytes > 0`) could rot
+    /// unnoticed behind the default `Headless` policy.
+    #[test]
+    fn compile_policy_produces_real_artifact_bytes() {
+        let artifact = match NexusOrchestrator::new()
+            .with_build_policy(BuildPolicy::Compile)
+            .run_agent_loop(INTENT, &StaticAgent::new())
+        {
+            Ok(a) => a,
+            // No `cargo` on PATH (e.g. a minimal CI image): the path is
+            // untestable here, but it must not be reported as a logic failure.
+            Err(NexusError::Build(msg)) if msg.starts_with("cargo") => {
+                eprintln!("skipping Compile test (no cargo): {msg}");
+                return;
+            }
+            Err(e) => panic!("Compile path failed unexpectedly: {e}"),
+        };
+        assert!(
+            !artifact.compiled_binary.is_empty(),
+            "a real compile must yield artifact bytes"
+        );
+        assert!(artifact.all_verified());
+    }
+
     #[test]
     fn attestation_writes_the_run_log_beside_the_manifest() {
         let artifact = NexusOrchestrator::new()
@@ -663,10 +690,7 @@ mod tests {
 
         // `write_run_log` independently writes the same content.
         let standalone = artifact.write_run_log(&dir).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&standalone).unwrap(),
-            run_log
-        );
+        assert_eq!(std::fs::read_to_string(&standalone).unwrap(), run_log);
 
         std::fs::remove_dir_all(&dir).ok();
     }

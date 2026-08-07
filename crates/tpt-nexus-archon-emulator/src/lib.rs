@@ -84,3 +84,47 @@ pub use syscall::{SyscallRequest, SyscallResponse};
 // to its own dependency list.
 pub use tpt_archon_bridge::capability::{Capability, Resource, Right};
 pub use tpt_archon_core::page::PAGE_SIZE;
+
+/// Assert that a loaded process holds exactly the expected capability rights for
+/// a set of named functions — a one-line policy test against your own `.telos`.
+///
+/// The macro looks each function up in the process's grant table (by bare
+/// function name, the same key the emulator mints under) and asserts the right
+/// it was granted equals what you expect. This is the intended way for a project
+/// to pin its capability surface in a regression test instead of hand-rolling
+/// `process().grant_for_function(...).right` assertions.
+///
+/// # Example
+///
+/// ```ignore
+/// use tpt_nexus_archon_emulator::{assert_grants, ArchonEmulator, Right, SyscallRequest};
+/// use tpt_nexus_orchestrator::{NexusOrchestrator, StaticAgent};
+///
+/// let artifact = NexusOrchestrator::new().run_agent_loop(src, &StaticAgent::new()).unwrap();
+/// let mut emulator = ArchonEmulator::new();
+/// let pid = emulator.load_artifact(&artifact).unwrap();
+/// assert_grants!(emulator, pid, {
+///     "settle"          => Right::ReadWrite,
+///     "current_balance" => Right::Read,
+/// });
+/// ```
+#[macro_export]
+macro_rules! assert_grants {
+    ($emulator:expr, $pid:expr, { $($func:expr => $right:expr),* $(,)? }) => {{
+        let __process = $crate::ArchonEmulator::process(&$emulator, $pid)
+            .unwrap_or_else(|| panic!("assert_grants!: no process with pid {}", $pid));
+        $(
+            {
+                let __expected: $crate::Right = $right;
+                let __grant = __process
+                    .grant_for_function($func)
+                    .unwrap_or_else(|| panic!("assert_grants!: `{}` has no grant", $func));
+                assert_eq!(
+                    __grant.right, __expected,
+                    "assert_grants!: `{}` right mismatch (expected {:?}, got {:?})",
+                    $func, __expected, __grant.right
+                );
+            }
+        )*
+    }};
+}

@@ -1,0 +1,17 @@
+# Sample nexus.toml — see templates/README.md for the full schema.
+#
+# Run `nexus verify <file>.telos --policy nexus.toml` to apply these overrides.
+
+# Which agent drives the verify loop: "static" (default, offline) or "llm".
+agent = "static"
+
+# Force a function's derived capability right. Names match the bare function
+# name the emulator mints under. Anything not listed keeps its derived right
+# (ReadWrite when the body writes a struct field, Read otherwise).
+[[grant]]
+func  = "settle"
+right = "ReadWrite"
+
+[[grant]]
+func  = "current_balance"
+right = "Read"

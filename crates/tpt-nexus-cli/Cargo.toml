@@ -15,6 +15,14 @@ categories.workspace = true
 name = "nexus"
 path = "src/main.rs"
 
+[features]
+default = []
+# Forwarded to the nexus orchestrator / telos SDK: enables the LLM-backed
+# `CodeAgent`. When off (the default), the CLI only ever uses `StaticAgent`
+# and pulls no network/HTTP dependencies. Set `NEXUS_AGENT=llm` at runtime
+# (with `TELAS_LLM_KEY` etc.) to drive the loop with a real model.
+llm = ["tpt-nexus-orchestrator/llm"]
+
 [dependencies]
 tpt-nexus-orchestrator.workspace = true
 tpt-nexus-archon-emulator.workspace = true
@@ -22,3 +30,7 @@ tpt-archon-bridge.workspace = true
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+toml.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+serde.workspace = true

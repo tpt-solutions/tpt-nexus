@@ -1,0 +1,23 @@
+// Example 3 — Compiled Artifact
+//
+// The first two examples run under `BuildPolicy::Headless`: the verifier and
+// attestor run, but no real bytes are produced — `image_bytes` is 0. This
+// example flips the policy to `BuildPolicy::Compile`, so the generated Rust
+// crate is handed to `cargo build` and the compiled artifact bytes are read
+// back and carried on the `VerifiedArtifact`.
+//
+// It proves the "compiled artifact" claim is visually demonstrated end to end:
+// a verified, attested `.telos` program really can be lowered to Rust and built.
+
+@boundary(cpu_bound)
+module Counter {
+    invariant Counter { value >= 0 }
+    func increment(c: Counter, by: PositiveInt)
+        requires c.value >= 0
+        ensures c.value == old(c.value) + by
+    {
+        mutate state {
+            c.value += by
+        }
+    }
+}

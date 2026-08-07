@@ -63,17 +63,85 @@ grants, the manifest re-check).
 | `tpt-nexus-archon-emulator` | Steps 6–7. A thin process layer over the real `tpt-archon` kernel/bridge, `#![forbid(unsafe_code)]`. |
 | `out-nexus-examples` | The two runnable examples and the end-to-end integration test. |
 
-## Run it
+## Quickstart
 
 ```text
-cargo run -p out-nexus-examples --example example1_monotonic_timestamp
-cargo run -p out-nexus-examples --example example2_capability_boundary
+# 1. Verify a .telos program, print the derived capability table, write the
+#    attestation to nexus-out/.
+cargo run -p tpt-nexus-cli -- verify examples/capability_boundary.telos
+
+# 2. Prove the "compiled artifact" claim end to end (shells out to cargo).
+cargo run -p tpt-nexus-cli -- verify examples/compiled_artifact.telos --compile
+
+# 3. Security-regression view: what changed about the capability surface?
+cargo run -p tpt-nexus-cli -- diff a.telos b.telos
+
+# 4. Render the agent's reasoning trace as a shareable Markdown/HTML artifact.
+cargo run -p tpt-nexus-cli -- trace examples/monotonic_timestamp.telos
+
+# 5. Sign an attestation (ed25519) so it is tamper-evident, not just checkable.
+cargo run -p tpt-nexus-cli -- sign nexus-out/telos-proof.json
+
+# 6. Scaffold a new program from a starter template.
+cargo run -p tpt-nexus-cli -- new my_service --template ledger
+
+# 7. Re-verify a file whenever it changes on disk.
+cargo run -p tpt-nexus-cli -- watch examples/monotonic_timestamp.telos
+
+# Quality gate (also run in CI / pre-commit).
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
 `example1` shows a genuine fail-then-fix repair loop. `example2` shows a
 read-only query (`Read`) and a mutator (`ReadWrite`) minted from the same
 module, then proves a write through the read-only grant is refused by archon.
+`example3` demonstrates the real `cargo build` of the generated Rust crate.
+
+## How grants are derived
+
+Nexus mints **one page capability per verified function**. The *right* is not
+something the `.telos` author writes — it is **derived from what the program
+was proved to do**:
+
+```text
+                .telos function
+                     │
+                     ▼
+        did the accepted body write a struct field?
+                     │
+        ┌────────────┴─────────────┐
+        │ yes                     │ no (pure query)
+        ▼                         ▼
+   Right::ReadWrite          Right::Read
+   (mutator earns write)     (query earns read-only)
+```
+
+The derivation lives in one place —
+`tpt-nexus-archon-emulator::derive_rights` — and is shared by the runtime
+(`load_artifact`), the `nexus verify` table, and `nexus diff`, so the reported
+surface can never drift from what is actually minted. A `nexus.toml` policy can
+*override* a derived right (e.g. force a risky mutator down to `Read`) and pin
+the surface in version control.
+
+### The read-only `.telos` story
+
+A function that only *reads* state is derived as `Read`, and therefore cannot
+be granted write access. tpt-telos's IR admits only **struct-field assignments**
+in a function body, so a read-only function reads into a `let` binding
+(`let snapshot = a.balance`) and states its property over its inputs. That
+binding is not a mutation — nexus's `mutates_state` check (which recurses
+through `if`/`match` bodies) sees no field write and derives `Read`.
+
+## Run it
+
+```text
+cargo run -p out-nexus-examples --example example1_monotonic_timestamp
+cargo run -p out-nexus-examples --example example2_capability_boundary
+cargo run -p out-nexus-examples --example example3_compiled_artifact
+cargo test --workspace
+```
 
 ## Status & upstream gaps
 

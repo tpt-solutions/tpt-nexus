@@ -3,12 +3,46 @@
 //! security surface". Kept separate from `main.rs` so the logic is unit-testable
 //! without invoking the argument parser.
 
+pub mod policy;
+pub mod signing;
+pub mod trace;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use tpt_archon_bridge::capability::Right;
 use tpt_nexus_archon_emulator::derive_rights;
-use tpt_nexus_orchestrator::{NexusError, NexusOrchestrator, StaticAgent};
+use tpt_nexus_orchestrator::{CodeAgent, NexusError, NexusOrchestrator, StaticAgent};
+
+pub use policy::Policy;
+pub use signing::Keypair;
+pub use trace::{render_trace_html, render_trace_markdown};
+
+/// Choose the code agent for a run.
+///
+/// By default — and always when the `llm` feature is disabled — this is the
+/// offline, deterministic [`StaticAgent`]. When the `llm` feature is compiled
+/// in and `NEXUS_AGENT=llm` is set, a real [`LlmAgent`](tpt_nexus_orchestrator::LlmAgent)
+/// is constructed from the `TELAS_LLM_*` environment variables. If those are
+/// missing or invalid the choice falls back to the static agent rather than
+/// failing, so the env var is purely additive.
+pub fn select_agent() -> Box<dyn CodeAgent> {
+    #[cfg(feature = "llm")]
+    {
+        if std::env::var("NEXUS_AGENT").as_deref() == Ok("llm") {
+            match tpt_nexus_orchestrator::LlmAgent::from_env() {
+                Ok(agent) => return Box::new(agent),
+                Err(e) => {
+                    eprintln!(
+                        "warning: NEXUS_AGENT=llm requested but LlmAgent init failed: {e}; \
+                         falling back to StaticAgent"
+                    );
+                }
+            }
+        }
+    }
+    Box::new(StaticAgent::new())
+}
 
 /// A capability that changed between two versions of a program.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,10 +75,7 @@ impl CapabilityDiff {
         self.added
             .iter()
             .any(|(_, right)| *right == Right::ReadWrite)
-            || self
-                .changed
-                .iter()
-                .any(|c| strengthens(c.from, c.to))
+            || self.changed.iter().any(|c| strengthens(c.from, c.to))
     }
 }
 
@@ -62,10 +93,7 @@ fn strengthens(from: Right, to: Right) -> bool {
 ///
 /// `a` is the baseline (e.g. the committed version); `b` is the candidate
 /// (e.g. the PR). The ordering matters for `has_strengthening`.
-pub fn capability_diff(
-    a: &BTreeMap<String, Right>,
-    b: &BTreeMap<String, Right>,
-) -> CapabilityDiff {
+pub fn capability_diff(a: &BTreeMap<String, Right>, b: &BTreeMap<String, Right>) -> CapabilityDiff {
     let mut diff = CapabilityDiff::default();
     for (name, right) in b {
         match a.get(name) {
@@ -90,7 +118,7 @@ pub fn capability_diff(
 /// (function name -> right). Fails if the program does not verify.
 pub fn run_and_derive(path: &Path) -> Result<BTreeMap<String, Right>, NexusError> {
     let source = std::fs::read_to_string(path)?;
-    let artifact = NexusOrchestrator::new().run_agent_loop(&source, &StaticAgent::new())?;
+    let artifact = NexusOrchestrator::new().run_agent_loop(&source, select_agent().as_ref())?;
     derive_rights(&artifact).map_err(|e| NexusError::Panic(format!("{e}")))
 }
 
@@ -109,10 +137,7 @@ mod tests {
     use super::*;
 
     fn set(pairs: &[(&str, Right)]) -> BTreeMap<String, Right> {
-        pairs
-            .iter()
-            .map(|(n, r)| (n.to_string(), *r))
-            .collect()
+        pairs.iter().map(|(n, r)| (n.to_string(), *r)).collect()
     }
 
     #[test]

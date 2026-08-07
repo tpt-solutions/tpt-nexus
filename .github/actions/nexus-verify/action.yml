@@ -1,0 +1,90 @@
+# Composite action: verify changed `.telos` files and post the capability
+# table as a PR comment.
+#
+# Designed to be dropped into a workflow on any repo that ships `.telos`
+# programs and wants a capability-regression gate. Because nexus verifies
+# against real `tpt-telos`/`tpt-archon` siblings, the action checks those out
+# alongside the nexus repo.
+#
+# Inputs:
+#   telos-ref / archon-ref : git refs (branch/sha) to pin the siblings to.
+#   fail-on-strengthening  : if true, a capability escalation fails the step.
+#   comment                : if true, post the derived capability table to the PR.
+
+name: nexus-verify
+description: Verify changed .telos files with tpt-nexus and report the capability table
+
+inputs:
+  telos-ref:
+    description: Git ref of tpt-telos to build against
+    required: false
+    default: main
+  archon-ref:
+    description: Git ref of tpt-archon to build against
+    required: false
+    default: main
+  fail-on-strengthening:
+    description: Fail the step if a capability was escalated
+    required: false
+    default: "true"
+  comment:
+    description: Post the capability table as a PR comment
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Check out nexus
+      uses: actions/checkout@v4
+
+    - name: Check out sibling tpt-telos
+      uses: actions/checkout@v4
+      with:
+        repository: TPT-Org/tpt-telos
+        ref: ${{ inputs.telos-ref }}
+        path: ../tpt-telos
+
+    - name: Check out sibling tpt-archon
+      uses: actions/checkout@v4
+      with:
+        repository: TPT-Org/tpt-archon
+        ref: ${{ inputs.archon-ref }}
+        path: ../tpt-archon
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Build the nexus CLI
+      shell: bash
+      run: cargo build -p tpt-nexus-cli
+
+    - name: Verify changed .telos files
+      id: verify
+      shell: bash
+      run: |
+        changed=$(git diff --name-only --diff-filter=ACMR origin/${{ github.base_ref }}...HEAD -- '*.telos' || true)
+        if [ -z "$changed" ]; then
+          echo "no .telos files changed"
+          exit 0
+        fi
+        status=0
+        for f in $changed; do
+          echo "::group::nexus verify $f"
+          ./target/debug/nexus verify "$f" --compile || status=1
+          echo "::endgroup::"
+        done
+        exit $status
+
+    - name: Post capability table as a PR comment
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: nexus-capabilities
+        message: |
+          ## tpt-nexus capability surface
+          Run `nexus verify <file>.telos` locally to reproduce. A `ReadWrite`
+          grant means the function was proved to write state; `Read` means it is
+          a pure query. See the README "How grants are derived" section.
