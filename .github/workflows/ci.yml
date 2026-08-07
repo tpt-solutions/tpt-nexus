@@ -55,16 +55,22 @@ jobs:
           cargo run -q -p tpt-nexus-cli -- verify examples/compiled_artifact.telos --compile
 
   # Guard against silent drift between this harness and the siblings it builds
-  # against. Each matrix entry pins a (telos, archon) ref pair; if a bump breaks
-  # the integration, this job fails before the change is merged.
+  # against. Each matrix entry pins a (telos, archon) ref pair and a Rust
+  # toolchain; if a bump breaks the integration, this job fails before the change
+  # is merged. Add rows here when a released sibling tag should be tracked.
   compatibility-matrix:
-    name: compat (${{ matrix.telos-ref }} / ${{ matrix.archon-ref }})
+    name: compat (${{ matrix.telos-ref }} / ${{ matrix.archon-ref }} / ${{ matrix.rust }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        telos-ref: [main]
-        archon-ref: [main]
+        include:
+          - telos-ref: main
+            archon-ref: main
+            rust: stable
+          - telos-ref: main
+            archon-ref: main
+            rust: beta
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -77,6 +83,6 @@ jobs:
           repository: TPT-Org/tpt-archon
           ref: ${{ matrix.archon-ref }}
           path: ../tpt-archon
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@${{ matrix.rust }}
       - name: Test against pinned siblings
         run: cargo test --workspace

@@ -185,7 +185,34 @@ impl ArchonEmulator {
     ///   source.
     /// * [`ArchonError::UnverifiedArtifact`] — a function did not verify.
     /// * [`ArchonError::OutOfBounds`] — the device has too few pages.
+    ///
+    /// The right each function earns is **derived automatically** from its
+    /// verified body (see [`derive_rights`]). To override a derived right with a
+    /// `nexus.toml` policy instead, use
+    /// [`load_artifact_with_rights`](Self::load_artifact_with_rights).
     pub fn load_artifact(&mut self, artifact: &VerifiedArtifact) -> Result<ProcessId, ArchonError> {
+        // Derive the right each function earns (the default, policy-free path).
+        let rights = derive_rights(artifact)?;
+        self.load_artifact_with_rights(artifact, &rights)
+    }
+
+    /// Load an artifact, but mint capabilities using a caller-supplied right map
+    /// rather than the auto-derived one.
+    ///
+    /// This is the policy-aware entry point: `nexus verify --policy` resolves a
+    /// `nexus.toml` into a `BTreeMap<func, Right>` (derived rights with
+    /// overrides applied) and passes it here, so a forced-down `Read` is actually
+    /// enforced by the emulator, not merely printed. The supplied rights must
+    /// cover every verified function; a missing entry silently degrades to
+    /// [`Right::Read`] to avoid an unverified panic, matching
+    /// [`derive_rights`](crate::derive_rights)'s own fallback.
+    ///
+    /// Validation ([5. VALIDATE]) runs identically to [`load_artifact`].
+    pub fn load_artifact_with_rights(
+        &mut self,
+        artifact: &VerifiedArtifact,
+        rights: &BTreeMap<String, Right>,
+    ) -> Result<ProcessId, ArchonError> {
         // [5. VALIDATE] Re-derive both hashes; never trust a passed-in flag.
         let verification = tpt_nexus_manifest_validator::validate_bytes(
             std::path::Path::new("<memory>/telos-proof.json"),
@@ -219,9 +246,10 @@ impl ArchonEmulator {
             });
         }
 
-        // Which functions write state? Derived from the accepted body by the
-        // orchestrator. Single source of truth shared with `nexus verify`/`diff`.
-        let rights = derive_rights(artifact)?;
+        // Which functions write state? When a policy is supplied the caller has
+        // already applied its overrides to `rights`; otherwise `rights` is the
+        // auto-derived map from `load_artifact`. Single source of truth shared
+        // with `nexus verify`/`diff`.
 
         // [6. MINT] One page capability per verified function.
         let mut grants = Vec::new();
@@ -739,6 +767,105 @@ mod tests {
             },
         );
         assert!(ok.is_ok(), "re-admitted capability should service syscalls");
+    }
+
+    /// A `nexus.toml` policy can force a risky mutator down to `Read`. The
+    /// override must be enforced by the emulator, not just printed in the table:
+    /// a write through that grant is refused.
+    #[test]
+    fn policy_override_forcing_read_denies_write() {
+        let mut emulator = ArchonEmulator::new();
+        let artifact = artifact(SINGLE_FUNC); // `increment` writes state -> ReadWrite
+        let mut rights = derive_rights(&artifact).expect("derive rights");
+        // The policy pins `increment` down to `Read`, despite it being a mutator.
+        rights.insert("increment".to_string(), Right::Read);
+
+        let pid = emulator
+            .load_artifact_with_rights(&artifact, &rights)
+            .expect("forced-down load");
+        let page = emulator
+            .process(pid)
+            .unwrap()
+            .page_of("increment")
+            .expect("grant exists");
+
+        let result = emulator.handle_syscall(
+            pid,
+            SyscallRequest::WritePage {
+                block_id: page,
+                data: b"value=5".to_vec(),
+            },
+        );
+        assert!(
+            matches!(result, Err(ArchonError::CapabilityViolation { .. })),
+            "a policy-forced Read must deny a write: got {result:?}"
+        );
+    }
+
+    /// The true zero-copy path: borrow a page in place (no copy) and read it
+    /// directly, observing bytes written through the normal syscall path.
+    #[test]
+    fn with_page_exposes_the_zero_copy_borrow() {
+        let mut emulator = ArchonEmulator::new();
+        let pid = emulator.load_artifact(&artifact(SINGLE_FUNC)).unwrap();
+        let page = emulator.process(pid).unwrap().page_of("increment").unwrap();
+
+        // Write through the value-returning syscall...
+        emulator
+            .handle_syscall(
+                pid,
+                SyscallRequest::WritePage {
+                    block_id: page,
+                    data: b"value=1".to_vec(),
+                },
+            )
+            .expect("write via syscall");
+
+        // ...and observe it through the zero-copy in-place borrow (no copy out).
+        let seen = emulator
+            .with_page(pid, page, |p| p.as_bytes()[..7].to_vec())
+            .expect("zero-copy read");
+        assert!(
+            seen.starts_with(b"value=1"),
+            "page should carry the written bytes: {seen:?}"
+        );
+    }
+
+    /// A device with too few pages must eventually refuse to mint, rather than
+    /// silently allocating off the end of the device.
+    #[test]
+    fn page_allocator_exhaustion_is_rejected() {
+        // One page only: TWO_FUNCS needs two (settle, read), so the second mint
+        // must fail with OutOfBounds rather than panic or wrap.
+        let mut emulator = ArchonEmulator::with_capacity(1, 1);
+        let err = emulator
+            .load_artifact(&artifact(TWO_FUNCS))
+            .expect_err("two functions cannot fit in one page");
+        assert!(
+            matches!(err, ArchonError::OutOfBounds { block_id, .. } if block_id == 1),
+            "expected exhaustion at the second page, got {err:?}"
+        );
+    }
+
+    /// A write longer than a page is refused before it can overflow the buffer.
+    #[test]
+    fn oversized_write_is_rejected() {
+        let mut emulator = ArchonEmulator::new();
+        let pid = emulator.load_artifact(&artifact(SINGLE_FUNC)).unwrap();
+        let page = emulator.process(pid).unwrap().page_of("increment").unwrap();
+
+        let too_big = vec![0u8; PAGE_SIZE + 1];
+        let err = emulator.handle_syscall(
+            pid,
+            SyscallRequest::WritePage {
+                block_id: page,
+                data: too_big,
+            },
+        );
+        assert!(
+            matches!(err, Err(ArchonError::PayloadTooLarge { .. })),
+            "oversized payload must be rejected: got {err:?}"
+        );
     }
 
     #[test]

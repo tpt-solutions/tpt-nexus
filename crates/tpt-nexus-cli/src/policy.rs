@@ -72,7 +72,7 @@ impl Policy {
     /// Parse from a TOML string (handy for tests and embedded policies).
     pub fn from_toml(text: &str) -> Result<Self, NexusError> {
         let doc: Policy = toml::from_str(text)
-            .map_err(|e| NexusError::Panic(format!("invalid nexus.toml: {e}")))?;
+            .map_err(|e| NexusError::Policy(format!("invalid nexus.toml: {e}")))?;
         doc.validate()
     }
 
@@ -80,7 +80,7 @@ impl Policy {
     fn validate(self) -> Result<Self, NexusError> {
         for g in &self.grant {
             parse_right(&g.right)
-                .map_err(|e| NexusError::Panic(format!("grant `{}`: {e}", g.func)))?;
+                .map_err(|e| NexusError::Policy(format!("grant `{}`: {e}", g.func)))?;
         }
         Ok(self)
     }

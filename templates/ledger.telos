@@ -1,7 +1,18 @@
 module Ledger {
-    invariant Account { balance >= 0 }
+    // The invariant bounds the state: an account balance can never be negative.
+    invariant Account {
+        balance >= 0
+    }
+
+    // Debit `amount` from an account. A mutator: it writes `balance`, so the
+    // verifier proves a struct-field write and nexus derives the `ReadWrite`
+    // right for it.
     func settle(a: Account, amount: PositiveInt)
         requires a.balance >= amount
         ensures a.balance == old(a.balance) - amount
-    { mutate state { a.balance -= amount } }
+    {
+        mutate state {
+            a.balance -= amount
+        }
+    }
 }

@@ -8,9 +8,10 @@
 //! document, made with a project's signing key, closes that gap: a manifest is
 //! trustworthy only if it carries a signature from a key the project trusts.
 //!
-//! Signing is optional and opt-in: `nexus sign` produces a `.sig` file; `nexus
-//! verify` (or any reviewer) checks it against the project's published public
-//! key. No signing key is ever written into the manifest.
+//! Signing is optional and opt-in: `nexus sign` produces a `.sig` file; any
+//! reviewer then confirms it with `nexus verify-signature <manifest> <sig>
+//! <pubkey>`, checking the manifest against the project's published public key.
+//! No signing key is ever written into the manifest.
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
@@ -48,6 +49,16 @@ impl Keypair {
     /// The public key as a hex string, for publishing / verification.
     pub fn public_hex(&self) -> String {
         hex_encode(&self.signing.verifying_key().to_bytes())
+    }
+
+    /// The secret key as a hex string (32 bytes).
+    ///
+    /// Only available when the key was just generated in-process — there is no
+    /// accessor that can recover a secret from a public key, by construction.
+    /// Callers that generated the key must persist this value themselves; `nexus
+    /// sign` prints it once with an explicit "save this now" warning.
+    pub fn secret_hex(&self) -> String {
+        hex_encode(&self.signing.to_bytes())
     }
 
     /// Sign a message, returning the 64-byte raw signature.

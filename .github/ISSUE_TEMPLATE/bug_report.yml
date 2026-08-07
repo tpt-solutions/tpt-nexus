@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a defect in tpt-nexus (the telos↔archon integration harness)
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        Minimal `.telos` source and the `nexus` command(s) you ran. If the bug is
+        in capability minting/denial, include the derived capability table
+        (`nexus verify <file>.telos`) or the `nexus diff` output.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Rust version (`rustc --version`), and the checked-out commits of tpt-telos / tpt-archon / tpt-nexus.
+    validations:
+      required: true

@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest a capability, CLI, or policy feature for tpt-nexus
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What capability-surface or developer-experience gap are you hitting?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        How should it work? Keep in mind nexus must stay a thin, no-`unsafe` glue
+        layer over tpt-telos and tpt-archon — prefer reusing existing upstream APIs.
+    validations:
+      required: true

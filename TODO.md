@@ -4,12 +4,17 @@ Tracks the build of `tpt-nexus`, the integration harness proving the closed
 loop `tpt-telos` (intent + verification + attestation) → `tpt-archon`
 (capability-gated execution) actually works end-to-end.
 
-**Status (as of the latest build session):** §1–§7 are complete and green —
-`cargo fmt --check`, `cargo clippy -D warnings`, and `cargo test --workspace`
-all pass (55 tests, including the `loop_then_archon` e2e test). Both runnable
-examples work against the real `tpt-telos-sdk` and `tpt-archon` crates. The only
-carried-over item is the §9 LLM stretch goal. The `telos-sdk` row in §0 was
-updated: the SDK now exists, so nexus builds against it (see the edits below).
+**Status:** §1–§11 are complete and green. `cargo fmt --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, and
+`cargo test --workspace` all pass (**81 tests + doctests**, including the
+`loop_then_archon` e2e test and the new CLI integration tests in
+`crates/tpt-nexus-cli/tests/cli.rs`). Three runnable examples
+(`example1`–`example3`) and six starter templates (including a multi-module
+`multi_module.telos`) work against the real `tpt-telos-sdk` and `tpt-archon`
+crates. The `telos-sdk` row in §0 was updated: the SDK now exists, so nexus
+builds against it. The CLI now also exposes `verify --policy/--json/--output`,
+`diff --json` (with distinct 0/1/2 exit codes), `sign` (recovering and printing
+the secret key), `verify-signature`, `completions`, `new --force`, and `watch`.
 
 **Decisions locked in before starting (see "Spec vs. reality" below for why):**
 - **Reuse real crates.** Nexus is a thin glue/demo layer over the existing,
@@ -195,8 +200,9 @@ examples. Grouped by kind; the "Bugs" block is being fixed this session.
 ### 10.4 Usability / automation / adoption
 
 - [x] **Starter template gallery** under `templates/`: `counter`, `ledger`,
-   `rate-limiter`, `oracle`, `kv-store` — each a minimal, already-verified `.telos`
-   plus a `nexus.toml`. New users copy one and go.
+   `kv_store`, `oracle`, `rate-limiter`, and a multi-module `multi_module` — each a
+   minimal, already-verified, commented `.telos` shipped alongside a sample
+   `nexus.toml` (so `nexus new` copies both). New users copy one and go.
 - [x] **`nexus new <name>`** scaffolding that clones a template + writes config.
 - [x] **`nexus watch examples/`** dev loop (re-verify on save).
 - [x] **Composite GitHub Action** + pre-commit hook (`fmt`+`clippy`) in a `justfile`.
@@ -207,5 +213,118 @@ examples. Grouped by kind; the "Bugs" block is being fixed this session.
    as `Read`; only a struct-field write earns `ReadWrite`).
 - [x] **Third example showing `Compile`** so `image_bytes > 0` and the "compiled
    artifact" claim is visually demonstrated.
+
+---
+
+## 11. Review findings (session 2) — independent verification + new issues
+
+A second review independently verified §10.1's 5 bug fixes against the code
+(all confirmed real, all covered by tests) but found that several §10.2/§10.3
+items marked `[x]` are only partially real — the code exists but has defects
+serious enough that the checkmark overstated what was working. Tracked here
+so nothing regresses to "looks done, isn't." Full findings/rationale in the
+review plan; this section is the execution checklist.
+
+### 11.1 Bugs (new, not in §10.1)
+
+- [x] **`nexus sign` discards the generated secret key.** `Keypair::generate()`
+   makes a fresh key but there's no accessor to read it back, and `sign()`
+   never prints it despite `--help` promising it's "printed if omitted."
+   Fix: add `Keypair::secret_hex()`, print it with a "save this now" warning
+   when generated.
+- [x] **Policy right-overrides never reach the capability-minting path.**
+   `nexus verify`'s `policy.apply(rights)` only affects the printed table;
+   `ArchonEmulator::load_artifact` calls the un-overridden `derive_rights`
+   directly and has no policy parameter. A pinned-down `Read` isn't actually
+   enforced — cosmetic only, contradicts README's claim. Fix: give
+   `load_artifact` a policy-aware entry point; add a test proving a
+   `Read`-forced mutator is denied a write via the emulator.
+- [x] **`NexusError::Panic` misused as a generic catch-all.** Unrelated
+   failures (duplicate function name, bad policy TOML) are funneled through
+   `NexusError::Panic`, whose `Display` always appends a "bare local
+   assignment" hint that's only true for genuine telos panics. Fix: add
+   proper error variants for policy/ambiguity failures.
+- [x] **Two starter templates fail to parse.** `templates/kv_store.telos:2`
+   and `templates/rate_limiter.telos:2` use comma-separated invariant clauses,
+   which isn't valid `.telos` grammar. Fix: one clause per `invariant` block,
+   matching every working example.
+- [x] **Root `justfile` doesn't parse with real `just`.** `[fmt]` / `[ci:...]`
+   blocks aren't valid recipe declarations (`just --list` fails outright).
+   Fix: rewrite with valid `name:` recipe syntax.
+- [x] **Rough edges**: `nexus sign`'s self-check computes `ok` but always
+   returns `ExitCode::SUCCESS`; `nexus new <name>` silently overwrites an
+   existing file with no `--force` gate; `nexus diff` reports a missing file
+   as a verification failure with a leaked raw OS error instead of the
+   `"cannot read {path}"` phrasing every other subcommand uses.
+
+### 11.2 Doc/reality drift
+
+- [x] Fill in real GitHub URLs in `README.md:3` (currently literal
+   `https://github.com/...` placeholders) and reconcile the `tpt-solutions`
+   vs. `TPT-Org` org-name mismatch across `Cargo.toml`, README, CI YAML, and
+   the composite action.
+- [x] Fix TODO.md §10.4's stale "plus a `nexus.toml`" claim (make it true, or
+   correct the checklist).
+- [x] Fix `signing.rs`'s doc comment, which claims `nexus verify` checks
+   signatures — no such code path exists yet (see §11.6).
+- [x] Give the "compatibility matrix" CI job real matrix entries (currently
+   both axes are `[main]`, i.e. not actually a matrix) or relabel it.
+- [x] Add `nexus-validate-manifest` to the README Quickstart as the literal
+   step-5 (VALIDATE) command — currently only named in the crates table.
+- [x] Update the stale "55 tests" status line in TODO.md (actual: 66 + 8
+   doctests).
+
+### 11.3 Onboarding / adoption (highest leverage for faster adoption)
+
+- [x] Add a "Prerequisites" block near the top of README.md, before
+   Quickstart: state plainly that two sibling repos are required, give
+   copy-pasteable `git clone` commands, show the expected directory layout.
+- [x] Add a `just setup` recipe (or `scripts/bootstrap.sh`) that clones the
+   sibling repos if missing, mirroring what CI already does.
+- [x] Comment the five templates using the narrative style already proven in
+   `examples/*.telos` (explain `invariant`/`requires`/`ensures`/`mutate
+   state` inline) instead of the current zero-comment files.
+- [x] Add `nexus-out/` to `.gitignore` (currently every local `nexus verify`
+   run leaves untracked cruft).
+- [x] Stretch: a minimal multi-module template/example demonstrating mixed
+   `Read`/`ReadWrite` grants across module boundaries — a headline value
+   prop with no current demonstration.
+
+### 11.4 CLI ergonomics quick wins
+
+- [x] Add `#[command(version, about, ...)]` to the top-level `clap` command so
+   `nexus --version` and a real `nexus --help` description work.
+- [x] Remove the duplicate error print on verification failure (both
+   `tracing::error!` and `eprintln!` fire for the same failure, in two
+   different formats).
+- [x] Add distinct exit codes to `nexus diff` (clean / security-regression /
+   error), matching the 0/1/2/3 contract `nexus-validate-manifest` already
+   documents for itself.
+- [x] Nice-to-have if time allows: `--output <dir>` flag on `verify` instead
+   of the hardcoded `nexus-out/`.
+
+### 11.5 Test coverage gaps
+
+- [x] Add a test exercising `ArchonEmulator::with_page` (the zero-copy path)
+   under `cargo test` — currently only exercised by an example `cargo test`
+   never runs.
+- [x] Add tests that genuinely exhaust the page allocator (`OutOfBounds`) and
+   send an oversized write payload (`PayloadTooLarge`).
+- [x] Add `crates/tpt-nexus-cli/tests/` integration tests covering `sign`
+   (secret recoverable), `new` (overwrite protection), and `verify --policy`
+   (override actually enforced) — the missing coverage that let the lost
+   secret-key bug ship uncaught.
+
+### 11.6 Larger / innovation items (do last)
+
+- [x] `nexus verify --json` / `nexus diff --json` for CI-machine-readable
+   output.
+- [x] `nexus completions <shell>` via `clap_complete`.
+- [x] `nexus verify-signature <manifest> <sig> <pubkey>` subcommand, closing
+   the one-way-signing gap.
+- [x] `CONTRIBUTING.md` (translate `AGENTS.md` for human contributors) +
+   minimal `.github/ISSUE_TEMPLATE/` and `PULL_REQUEST_TEMPLATE.md`.
+- [x] Dependabot config for third-party deps (not the intentionally-unpinned
+   sibling path deps).
 
 

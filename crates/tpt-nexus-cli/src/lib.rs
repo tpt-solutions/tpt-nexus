@@ -119,7 +119,12 @@ pub fn capability_diff(a: &BTreeMap<String, Right>, b: &BTreeMap<String, Right>)
 pub fn run_and_derive(path: &Path) -> Result<BTreeMap<String, Right>, NexusError> {
     let source = std::fs::read_to_string(path)?;
     let artifact = NexusOrchestrator::new().run_agent_loop(&source, select_agent().as_ref())?;
-    derive_rights(&artifact).map_err(|e| NexusError::Panic(format!("{e}")))
+    derive_rights(&artifact).map_err(|e| match e {
+        tpt_nexus_archon_emulator::ArchonError::AmbiguousFunctionName(name) => {
+            NexusError::AmbiguousFunctionName(name)
+        }
+        other => NexusError::Policy(format!("{other}")),
+    })
 }
 
 /// Render a derived capability set as a Markdown table, ready to paste into a

@@ -1,0 +1,15 @@
+# Default nexus policy for a scaffolded project.
+#
+# `nexus verify --policy nexus.toml` reads this file. Everything is optional; with
+# no overrides, nexus derives each function's right from what it was proved to do.
+
+# Which agent drives the verify loop: "static" (offline, deterministic, default)
+# or "llm" (requires the `llm` feature + TELAS_LLM_* env).
+agent = "static"
+
+# Pin a function's derived right. Names match the bare function name the emulator
+# mints under; anything not listed keeps its derived right. Use this to force a
+# risky mutator down to `Read` and document the intended surface in version control.
+# [[grant]]
+# func  = "settle"
+# right = "ReadWrite"

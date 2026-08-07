@@ -1,7 +1,20 @@
 module RateLimiter {
-    invariant Bucket { count >= 0, count <= capacity }
+    // The invariant bounds the bucket: the count of permits can never be negative
+    // and never exceeds the configured capacity. Each clause is on its own line —
+    // `.telos` invariants take one condition per line, not a comma-separated list.
+    invariant Bucket {
+        count >= 0
+        count <= capacity
+    }
+
+    // Draw a permit. A mutator: it writes `count`, so the verifier proves a
+    // struct-field write and nexus derives the `ReadWrite` right for it.
     func allow(b: Bucket)
         requires b.count < b.capacity
         ensures b.count == old(b.count) + 1
-    { mutate state { b.count += 1 } }
+    {
+        mutate state {
+            b.count += 1
+        }
+    }
 }

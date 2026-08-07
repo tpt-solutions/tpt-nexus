@@ -1,0 +1,19 @@
+# Keep third-party dependencies in the workspace up to date.
+#
+# Note: the intentionally-unpinned sibling path dependencies (../tpt-telos,
+# ../tpt-archon) are ignored by Dependabot, as they are not registry crates.
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"

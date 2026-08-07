@@ -295,9 +295,11 @@ fn emit_tracing(event: &NexusEvent) {
                 "nexus run completed"
             );
         }
-        NexusEvent::RunFailed { reason } => {
-            tracing::error!(reason = %reason, "nexus run failed");
-        }
+        // The final run-failure is reported by the caller (which has the full
+        // `NexusError` and the right CLI context); emitting it here too would
+        // double-print the same failure in two formats. The event is still
+        // retained in the `RunLog` for structured/JSON-lines observability.
+        NexusEvent::RunFailed { .. } => {}
     }
 }
 

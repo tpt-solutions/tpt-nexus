@@ -1,7 +1,15 @@
 module Oracle {
-    invariant Price { price >= 0 }
+    // The invariant bounds the state: a reported price can never be negative.
+    invariant Price {
+        price >= 0
+    }
+
+    // Report the latest price. A pure query: it only reads state into a `let`
+    // binding, so nexus derives the `Read` right for it — no write access.
     func latest(p: Price)
         requires p.price >= 0
         ensures p.price >= 0
-    { let snapshot = p.price }
+    {
+        let snapshot = p.price
+    }
 }

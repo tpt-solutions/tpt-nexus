@@ -1,6 +1,6 @@
 # tpt-nexus
 
-**The integration harness that closes the loop between [`tpt-telos`](https://github.com/...) and [`tpt-archon`](https://github.com/...).**
+**The integration harness that closes the loop between [`tpt-telos`](https://github.com/TPT-Org/tpt-telos) and [`tpt-archon`](https://github.com/TPT-Org/tpt-archon).**
 
 `tpt-telos` turns intent into verified code and an attestation. `tpt-archon` is a
 capability-checked kernel. Nexus is the missing middle: it proves that a
@@ -63,6 +63,25 @@ grants, the manifest re-check).
 | `tpt-nexus-archon-emulator` | Steps 6–7. A thin process layer over the real `tpt-archon` kernel/bridge, `#![forbid(unsafe_code)]`. |
 | `out-nexus-examples` | The two runnable examples and the end-to-end integration test. |
 
+## Prerequisites
+
+nexus builds **against the two sibling repos it integrates**, as local path
+dependencies — it is not (yet) published to crates.io. Clone all three as
+siblings of the same parent directory:
+
+```text
+<parent>/
+  tpt-telos/      https://github.com/TPT-Org/tpt-telos
+  tpt-archon/     https://github.com/TPT-Org/tpt-archon
+  tpt-nexus/      https://github.com/TPT-Org/tpt-nexus   (this repo)
+```
+
+If a sibling is missing, `just setup` (or the CI workflow) will clone it for
+you. You also need a Rust toolchain (edition 2021, `rust-version` 1.74+). The
+default `verify` path is offline and requires no network access; only the
+optional `--compile` flag shells out to `cargo`, and the `llm` feature needs an
+LLM provider key.
+
 ## Quickstart
 
 ```text
@@ -79,13 +98,21 @@ cargo run -p tpt-nexus-cli -- diff a.telos b.telos
 # 4. Render the agent's reasoning trace as a shareable Markdown/HTML artifact.
 cargo run -p tpt-nexus-cli -- trace examples/monotonic_timestamp.telos
 
-# 5. Sign an attestation (ed25519) so it is tamper-evident, not just checkable.
-cargo run -p tpt-nexus-cli -- sign nexus-out/telos-proof.json
+# 5. VALIDATE: re-check that the produced attestation still describes its source
+#    (the anti-tamper gate, independent of the verifier).
+cargo run -p tpt-nexus-manifest-validator -- nexus-validate-manifest \
+    nexus-out/telos-proof.json nexus-out/source.telos
 
-# 6. Scaffold a new program from a starter template.
+# 6. Sign an attestation (ed25519) so it is tamper-evident, not just checkable,
+#    then confirm it with any reviewer.
+cargo run -p tpt-nexus-cli -- sign nexus-out/telos-proof.json
+cargo run -p tpt-nexus-cli -- verify-signature \
+    nexus-out/telos-proof.json nexus-out/telos-proof.json.sig --pubkey <hex>
+
+# 7. Scaffold a new program from a starter template (also copies nexus.toml).
 cargo run -p tpt-nexus-cli -- new my_service --template ledger
 
-# 7. Re-verify a file whenever it changes on disk.
+# 8. Re-verify a file whenever it changes on disk.
 cargo run -p tpt-nexus-cli -- watch examples/monotonic_timestamp.telos
 
 # Quality gate (also run in CI / pre-commit).

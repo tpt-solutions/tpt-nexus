@@ -18,9 +18,9 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
 license = "MIT OR Apache-2.0"
-authors = ["TPT Solutions"]
-repository = "https://github.com/tpt-solutions/tpt-nexus"
-homepage = "https://github.com/tpt-solutions/tpt-nexus"
+authors = ["TPT Org"]
+repository = "https://github.com/TPT-Org/tpt-nexus"
+homepage = "https://github.com/TPT-Org/tpt-nexus"
 keywords = ["verification", "capabilities", "integration", "formal-methods"]
 categories = ["development-tools", "simulation"]
 

@@ -52,7 +52,21 @@ pub enum NexusError {
     /// The telos verifier panicked (e.g. a read-only function body that assigns
     /// to a bare local, which telos's IR rejects). Caught so the whole run
     /// fails cleanly instead of unwinding out of nexus.
+    ///
+    /// This variant is reserved for *genuine* telos panics. Unrelated failures
+    /// (policy parse errors, ambiguous function names) have their own variants
+    /// and must not be funnelled through here.
     Panic(String),
+
+    /// A `nexus.toml` policy failed to load or validate (bad TOML, an unknown
+    /// right string, ...). Distinct from [`NexusError::Panic`] so the
+    /// diagnostic does not misleadingly suggest a telos verifier crash.
+    Policy(String),
+
+    /// Two modules declare a function with the same name, which makes capability
+    /// grants (keyed by bare function name) ambiguous. Surfaced as its own
+    /// variant so the diagnostic names the offending function.
+    AmbiguousFunctionName(String),
 
     /// Writing the generated project, the manifest, or the run log failed.
     Io(std::io::Error),
@@ -94,6 +108,12 @@ impl fmt::Display for NexusError {
                 "telos verifier panicked: {msg}\n\
                  hint: telos only admits field assignments in a function body; \
                  a read-only function must read state into a `let` binding, not assign to a bare local"
+            ),
+            NexusError::Policy(msg) => write!(f, "policy error: {msg}"),
+            NexusError::AmbiguousFunctionName(name) => write!(
+                f,
+                "function name `{name}` is declared in more than one module; \
+                 capability grants are keyed by bare function name and would be ambiguous"
             ),
             NexusError::Io(e) => write!(f, "io error: {e}"),
         }

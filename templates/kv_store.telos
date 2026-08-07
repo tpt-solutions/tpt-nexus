@@ -1,11 +1,30 @@
 module KV {
-    invariant Store { size >= 0, size <= capacity }
+    // The invariant bounds the store: it can never hold a negative number of
+    // entries, and it can never exceed its own capacity. Each clause is written
+    // on its own line — `.telos` invariants take one condition per line, not a
+    // comma-separated list.
+    invariant Store {
+        size >= 0
+        size <= capacity
+    }
+
+    // Insert a key. A clear mutator: it writes `size`, so the verifier proves a
+    // struct-field write and nexus derives the `ReadWrite` right for it.
     func put(k: Store, v: Int)
         requires k.size < k.capacity
         ensures k.size == old(k.size) + 1
-    { mutate state { k.size += 1 } }
+    {
+        mutate state {
+            k.size += 1
+        }
+    }
+
+    // Read the current size. A pure query: it only reads state into a `let`
+    // binding, so nexus derives the `Read` right.
     func get(k: Store)
         requires k.size >= 0
         ensures k.size >= 0
-    { let s = k.size }
+    {
+        let s = k.size
+    }
 }

@@ -1,0 +1,33 @@
+// A minimal multi-module program: two modules, each declaring one function, so the
+// derived grant set spans a module boundary. `increment` writes state and earns
+// `ReadWrite`; `read_entries` only reads and earns `Read`. Run
+// `nexus verify multi_module.telos` to see both grants side by side.
+module Counter {
+    invariant Counter {
+        value >= 0
+    }
+
+    // Mutator: writes `value`, so nexus derives `ReadWrite`.
+    func increment(c: Counter, by: PositiveInt)
+        requires c.value >= 0
+        ensures c.value == old(c.value) + by
+    {
+        mutate state {
+            c.value += by
+        }
+    }
+}
+
+module Logger {
+    invariant Log {
+        entries >= 0
+    }
+
+    // Pure query: only reads state into a `let` binding, so nexus derives `Read`.
+    func read_entries(l: Log)
+        requires l.entries >= 0
+        ensures l.entries >= 0
+    {
+        let n = l.entries
+    }
+}

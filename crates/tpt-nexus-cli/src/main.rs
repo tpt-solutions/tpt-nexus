@@ -14,17 +14,34 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use tpt_archon_bridge::capability::Right;
-use tpt_nexus_archon_emulator::derive_rights;
-use tpt_nexus_orchestrator::{BuildPolicy, NexusOrchestrator};
+use tpt_nexus_orchestrator::{BuildPolicy, NexusError, NexusOrchestrator};
 
+/// `nexus diff` exit-code contract (matches `nexus-validate-manifest`'s own
+/// 0/1/2/3 scheme by reserving 0/1/2 here):
+///   0 = clean (no capability change)
+///   1 = security regression (a capability was strengthened)
+///   2 = error (a side could not be verified)
+const DIFF_CLEAN: ExitCode = ExitCode::SUCCESS;
+fn diff_regression() -> ExitCode {
+    ExitCode::from(1)
+}
+fn diff_error() -> ExitCode {
+    ExitCode::from(2)
+}
+
+use tpt_nexus_archon_emulator::{derive_rights, ArchonEmulator};
 use tpt_nexus_cli::{
     capability_diff, render_capability_table, render_trace_html, render_trace_markdown,
     run_and_derive, select_agent, signing, Policy,
 };
 
+/// tpt-nexus: close the loop between tpt-telos (verified intent) and tpt-archon
+/// (capability-gated execution). Run `nexus verify <file>.telos` to derive and
+/// attest a program's capability surface.
 #[derive(Parser)]
+#[command(name = "nexus", version, about = "tpt-nexus: verify, attest, and gate .telos programs against tpt-archon", long_about = None)]
 enum Command {
     /// Verify a `.telos`, attest it, and print the derived capability table.
     Verify {
@@ -36,6 +53,12 @@ enum Command {
         /// Apply a `nexus.toml` policy (right overrides, agent selection).
         #[arg(long)]
         policy: Option<PathBuf>,
+        /// Directory to write the attestation into (default: `nexus-out`).
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Emit the derived grant set as JSON instead of a human table.
+        #[arg(long)]
+        json: bool,
     },
     /// Show the capability delta between two `.telos` sources.
     Diff {
@@ -43,6 +66,9 @@ enum Command {
         a: PathBuf,
         /// Candidate version (e.g. the PR's file).
         b: PathBuf,
+        /// Emit the capability delta as JSON instead of a human table.
+        #[arg(long)]
+        json: bool,
     },
     /// Render the agent's full reasoning trace as a shareable artifact.
     Trace {
@@ -64,14 +90,32 @@ enum Command {
     New {
         /// Name of the new file (without extension).
         name: String,
-        /// Starter template: counter, ledger, kv_store, oracle, rate_limiter.
+        /// Starter template: counter, ledger, kv_store, oracle, rate_limiter, multi_module.
         #[arg(long, default_value = "ledger")]
         template: String,
+        /// Overwrite an existing file with the same name.
+        #[arg(long)]
+        force: bool,
     },
     /// Re-verify a `.telos` file whenever it changes on disk.
     Watch {
         /// Path to the `.telos` source to watch.
         path: PathBuf,
+    },
+    /// Generate shell completions (bash, zsh, fish, powershell, elvish).
+    Completions {
+        /// The shell to generate completions for.
+        shell: clap_complete::Shell,
+    },
+    /// Verify an ed25519 signature over a proof manifest with a public key.
+    VerifySignature {
+        /// Path to the `telos-proof.json` that was signed.
+        manifest: PathBuf,
+        /// Path to the `.sig` file produced by `nexus sign`.
+        signature: PathBuf,
+        /// Hex-encoded ed25519 public key to verify against.
+        #[arg(long)]
+        pubkey: String,
     },
 }
 
@@ -89,15 +133,27 @@ fn main() -> ExitCode {
             path,
             compile,
             policy,
-        } => verify(&path, compile, policy.as_deref()),
-        Command::Diff { a, b } => diff(&a, &b),
+            output,
+            json,
+        } => verify(&path, compile, policy.as_deref(), output.as_deref(), json),
+        Command::Diff { a, b, json } => diff(&a, &b, json),
         Command::Trace { path, html } => trace(&path, html),
         Command::Sign {
             manifest,
             secret_key,
         } => sign(&manifest, secret_key.as_deref()),
-        Command::New { name, template } => new_project(&name, &template),
+        Command::New {
+            name,
+            template,
+            force,
+        } => new_project(&name, &template, force),
         Command::Watch { path } => watch(&path),
+        Command::Completions { shell } => completions(shell),
+        Command::VerifySignature {
+            manifest,
+            signature,
+            pubkey,
+        } => verify_signature(&manifest, &signature, &pubkey),
     }
 }
 
@@ -105,11 +161,13 @@ fn verify(
     path: &std::path::Path,
     compile: bool,
     policy_path: Option<&std::path::Path>,
+    output: Option<&std::path::Path>,
+    json: bool,
 ) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("cannot read {}: {e}", path.display());
+            tracing::error!("cannot read {}: {e}", path.display());
             return ExitCode::FAILURE;
         }
     };
@@ -117,7 +175,7 @@ fn verify(
     let policy = match policy_path.map(Policy::load) {
         Some(Ok(p)) => Some(p),
         Some(Err(e)) => {
-            eprintln!("cannot load policy {}: {e}", policy_path.unwrap().display());
+            tracing::error!("cannot load policy {}: {e}", policy_path.unwrap().display());
             return ExitCode::FAILURE;
         }
         None => None,
@@ -136,33 +194,77 @@ fn verify(
     let artifact = match orchestrator.run_agent_loop(&source, agent.as_ref()) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("verify failed: {e}");
+            tracing::error!("verify failed: {e}");
             return ExitCode::FAILURE;
         }
     };
 
-    // Apply any right overrides from the policy before reporting/attesting.
+    // Derive the right each function earns, then apply any policy overrides. The
+    // *same* map is what the emulator mints against, so an override is enforced —
+    // not just printed.
     let rights = match derive_rights(&artifact) {
         Ok(r) => match policy.as_ref() {
             Some(p) => p.apply(r),
             None => r,
         },
         Err(e) => {
-            eprintln!("cannot derive capabilities: {e}");
+            tracing::error!("cannot derive capabilities: {e}");
             return ExitCode::FAILURE;
         }
     };
+
+    // [6. MINT] Actually mint the capabilities through the emulator so policy
+    // overrides are enforced at the kernel boundary, not just rendered in a table.
+    let mut emulator = ArchonEmulator::new();
+    let pid = match emulator.load_artifact_with_rights(&artifact, &rights) {
+        Ok(pid) => pid,
+        Err(e) => {
+            tracing::error!("cannot mint capabilities: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let minted = emulator.process(pid).map(|p| p.grants.len()).unwrap_or(0);
+    let out_dir = output
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("nexus-out"));
+    let attestation = match artifact.write_attestation(&out_dir) {
+        Ok(att) => Some(att.manifest_path.display().to_string()),
+        Err(e) => {
+            tracing::warn!("could not write attestation: {e}");
+            None
+        }
+    };
+
+    if json {
+        let grants: serde_json::Map<String, serde_json::Value> = rights
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::json!(format!("{v:?}"))))
+            .collect();
+        let value = serde_json::json!({
+            "verified": rights.len(),
+            "grants": grants,
+            "policy": policy_path.map(|p| p.display().to_string()),
+            "minted_grants": minted,
+            "attestation": attestation,
+            "compiled_bytes": artifact.compiled_binary.len(),
+        });
+        println!("{value}");
+        return ExitCode::SUCCESS;
+    }
 
     println!("verified {} function(s)\n", rights.len());
     print!("{}", render_capability_table(&rights));
     if let Some(p) = policy_path {
         println!("\n(policy {})", p.display());
     }
+    println!(
+        "\nminted {} capability grant(s) into Archon process {pid}",
+        minted
+    );
 
-    let out_dir = PathBuf::from("nexus-out");
-    match artifact.write_attestation(&out_dir) {
-        Ok(att) => println!("\nattestation -> {}", att.manifest_path.display()),
-        Err(e) => eprintln!("warning: could not write attestation: {e}"),
+    if let Some(att) = attestation {
+        println!("\nattestation -> {att}");
     }
     if compile {
         println!(
@@ -177,14 +279,14 @@ fn trace(path: &std::path::Path, html: bool) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("cannot read {}: {e}", path.display());
+            tracing::error!("cannot read {}: {e}", path.display());
             return ExitCode::FAILURE;
         }
     };
     let artifact = match NexusOrchestrator::new().run_agent_loop(&source, select_agent().as_ref()) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("trace failed: {e}");
+            tracing::error!("trace failed: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -201,26 +303,26 @@ fn sign(manifest: &std::path::Path, secret_key: Option<&str>) -> ExitCode {
     let json = match std::fs::read_to_string(manifest) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("cannot read {}: {e}", manifest.display());
+            tracing::error!("cannot read {}: {e}", manifest.display());
             return ExitCode::FAILURE;
         }
     };
-    let keypair = match secret_key {
+    let (keypair, generated) = match secret_key {
         Some(hex) => match signing::Keypair::from_secret_hex(hex) {
-            Ok(k) => k,
+            Ok(k) => (k, false),
             Err(e) => {
-                eprintln!("invalid secret key: {e}");
+                tracing::error!("invalid secret key: {e}");
                 return ExitCode::FAILURE;
             }
         },
-        None => signing::Keypair::generate(),
+        None => (signing::Keypair::generate(), true),
     };
     let signature = keypair.sign(json.as_bytes());
     let sig_path = manifest.with_extension("json.sig");
     match std::fs::write(&sig_path, signing::to_hex(&signature)) {
         Ok(()) => {}
         Err(e) => {
-            eprintln!("cannot write {}: {e}", sig_path.display());
+            tracing::error!("cannot write {}: {e}", sig_path.display());
             return ExitCode::FAILURE;
         }
     }
@@ -231,33 +333,102 @@ fn sign(manifest: &std::path::Path, secret_key: Option<&str>) -> ExitCode {
         sig_path.display(),
         ok
     );
-    ExitCode::SUCCESS
+    if generated {
+        println!(
+            "\nSECRET KEY (save this now — it is shown only once):\n  {}",
+            keypair.secret_hex()
+        );
+    }
+    // The self-check proves the on-disk signature actually verifies; a failure
+    // here means something is fundamentally wrong with the signing pipeline, so
+    // it must be a hard error rather than a silent success.
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        tracing::error!("internal self-check failed: signature did not verify");
+        ExitCode::FAILURE
+    }
 }
 
-fn diff(a: &std::path::Path, b: &std::path::Path) -> ExitCode {
+fn diff(a: &std::path::Path, b: &std::path::Path, json: bool) -> ExitCode {
+    // Exit-code contract (matches `nexus-validate-manifest`):
+    //   0 = clean (no capability change)
+    //   1 = security regression (a capability was strengthened)
+    //   2 = error (could not verify one side)
     let baseline = match run_and_derive(a) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("baseline {} failed to verify: {e}", a.display());
-            return ExitCode::FAILURE;
+            tracing::error!("{}: {}", cannot_read(&e, a), e);
+            return diff_error();
         }
     };
     let candidate = match run_and_derive(b) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("candidate {} failed to verify: {e}", b.display());
-            return ExitCode::FAILURE;
+            tracing::error!("{}: {}", cannot_read(&e, b), e);
+            return diff_error();
         }
     };
 
     let delta = capability_diff(&baseline, &candidate);
     if delta.is_empty() {
-        println!(
-            "no capability change between {} and {}",
-            a.display(),
-            b.display()
-        );
-        return ExitCode::SUCCESS;
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "a": a.display().to_string(),
+                    "b": b.display().to_string(),
+                    "changed": false,
+                    "strengthening": false,
+                })
+            );
+        } else {
+            println!(
+                "no capability change between {} and {}",
+                a.display(),
+                b.display()
+            );
+        }
+        return DIFF_CLEAN;
+    }
+
+    if json {
+        let added: Vec<serde_json::Value> = delta
+            .added
+            .iter()
+            .map(|(n, r)| serde_json::json!({ "func": n, "right": format!("{r:?}") }))
+            .collect();
+        let removed: Vec<serde_json::Value> = delta
+            .removed
+            .iter()
+            .map(|(n, r)| serde_json::json!({ "func": n, "right": format!("{r:?}") }))
+            .collect();
+        let changed: Vec<serde_json::Value> = delta
+            .changed
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "func": c.func,
+                    "from": format!("{:?}", c.from),
+                    "to": format!("{:?}", c.to),
+                })
+            })
+            .collect();
+        let value = serde_json::json!({
+            "a": a.display().to_string(),
+            "b": b.display().to_string(),
+            "changed": true,
+            "strengthening": delta.has_strengthening(),
+            "added": added,
+            "removed": removed,
+            "changed_grants": changed,
+        });
+        println!("{value}");
+        return if delta.has_strengthening() {
+            diff_regression()
+        } else {
+            DIFF_CLEAN
+        };
     }
 
     println!("capability delta: {} -> {}\n", a.display(), b.display());
@@ -280,10 +451,20 @@ fn diff(a: &std::path::Path, b: &std::path::Path) -> ExitCode {
     }
 
     if delta.has_strengthening() {
-        eprintln!("\nSECURITY REGRESSION: a capability was strengthened");
-        ExitCode::FAILURE
+        println!("\nSECURITY REGRESSION: a capability was strengthened");
+        diff_regression()
     } else {
-        ExitCode::SUCCESS
+        DIFF_CLEAN
+    }
+}
+
+/// Render the phrasing every other subcommand uses for a missing/unreadable
+/// file, including when `run_and_derive` failed purely because the file could not
+/// be read (an `Io` error) rather than because verification failed.
+fn cannot_read(e: &NexusError, path: &std::path::Path) -> String {
+    match e {
+        NexusError::Io(_) => format!("cannot read {}", path.display()),
+        _ => format!("{} failed to verify", path.display()),
     }
 }
 
@@ -296,7 +477,54 @@ fn strengthens_note(from: Right, to: Right) -> bool {
     )
 }
 
-fn new_project(name: &str, template: &str) -> ExitCode {
+/// Print shell completion scripts for the given shell to stdout.
+fn completions(shell: clap_complete::Shell) -> ExitCode {
+    let mut cmd = Command::command();
+    let name = cmd.get_name().to_string();
+    clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
+    ExitCode::SUCCESS
+}
+
+/// Verify an ed25519 signature over a proof manifest against a public key. This
+/// closes the one-way-signing gap: `nexus sign` produces a `.sig`, and this
+/// command lets any reviewer confirm it was made with the project's key.
+fn verify_signature(
+    manifest: &std::path::Path,
+    signature: &std::path::Path,
+    pubkey: &str,
+) -> ExitCode {
+    let json = match std::fs::read_to_string(manifest) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("cannot read {}: {e}", manifest.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let sig_hex = match std::fs::read_to_string(signature) {
+        Ok(s) => s.trim().to_string(),
+        Err(e) => {
+            tracing::error!("cannot read {}: {e}", signature.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let sig_bytes = match signing::from_hex(&sig_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("invalid signature file: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let ok = signing::verify(pubkey, json.as_bytes(), &sig_bytes);
+    if ok {
+        println!("signature valid for {}", manifest.display());
+        ExitCode::SUCCESS
+    } else {
+        tracing::error!("signature verification FAILED for {}", manifest.display());
+        ExitCode::FAILURE
+    }
+}
+
+fn new_project(name: &str, template: &str, force: bool) -> ExitCode {
     let templates = std::env::var("NEXUS_TEMPLATES")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -307,7 +535,7 @@ fn new_project(name: &str, template: &str) -> ExitCode {
         });
 
     if !templates.is_dir() {
-        eprintln!("no templates found at {}", templates.display());
+        tracing::error!("no templates found at {}", templates.display());
         return ExitCode::FAILURE;
     }
 
@@ -325,7 +553,7 @@ fn new_project(name: &str, template: &str) -> ExitCode {
                     .collect()
             })
             .unwrap_or_default();
-        eprintln!(
+        tracing::error!(
             "no template `{template}` (available: {})",
             available.join(", ")
         );
@@ -333,9 +561,23 @@ fn new_project(name: &str, template: &str) -> ExitCode {
     }
 
     let dest = PathBuf::from(format!("{name}.telos"));
-    if let Err(e) = std::fs::copy(&src, &dest) {
-        eprintln!("cannot write {}: {e}", dest.display());
+    if dest.exists() && !force {
+        tracing::error!(
+            "{} already exists (use --force to overwrite)",
+            dest.display()
+        );
         return ExitCode::FAILURE;
+    }
+    if let Err(e) = std::fs::copy(&src, &dest) {
+        tracing::error!("cannot write {}: {e}", dest.display());
+        return ExitCode::FAILURE;
+    }
+    // Also copy the sample policy when there is one; never clobber an existing
+    // project policy.
+    let policy_src = templates.join("nexus.toml");
+    let policy_dest = PathBuf::from("nexus.toml");
+    if policy_src.is_file() && !policy_dest.exists() {
+        let _ = std::fs::copy(&policy_src, &policy_dest);
     }
     println!("scaffolded {} from template `{}`", dest.display(), template);
     println!("next: nexus verify {}", dest.display());
@@ -346,7 +588,7 @@ fn watch(path: &std::path::Path) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("cannot read {}: {e}", path.display());
+            tracing::error!("cannot read {}: {e}", path.display());
             return ExitCode::FAILURE;
         }
     };
@@ -365,7 +607,7 @@ fn watch(path: &std::path::Path) -> ExitCode {
         let current = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("re-read failed: {e}");
+                tracing::error!("re-read failed: {e}");
                 continue;
             }
         };
@@ -384,7 +626,7 @@ fn watch(path: &std::path::Path) -> ExitCode {
                     rights
                 );
             }
-            Err(e) => eprintln!("[{runs}] verify failed: {e}"),
+            Err(e) => tracing::error!("[{runs}] verify failed: {e}"),
         }
     }
 }

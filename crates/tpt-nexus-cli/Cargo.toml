@@ -35,3 +35,6 @@ toml.workspace = true
 ed25519-dalek.workspace = true
 rand.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+# Shell completion generation for `nexus completions <shell>`.
+clap_complete = "4"
