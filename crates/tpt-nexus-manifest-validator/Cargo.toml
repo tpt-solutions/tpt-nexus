@@ -8,8 +8,9 @@ rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["verification", "attestation", "integrity", "tamper-detection", "formal-methods"]
+categories = ["development-tools", "cryptography", "authentication"]
+readme = "README.md"
 
 [[bin]]
 name = "nexus-validate-manifest"

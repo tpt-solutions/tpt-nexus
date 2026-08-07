@@ -8,8 +8,9 @@ rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["verification", "attestation", "orchestration", "formal-methods", "capabilities"]
+categories = ["development-tools", "embedded", "simulation"]
+readme = "README.md"
 
 [features]
 default = []

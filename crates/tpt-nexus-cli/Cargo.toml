@@ -8,8 +8,9 @@ rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["cli", "verification", "capabilities", "attestation", "command-line"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
 
 [[bin]]
 name = "nexus"

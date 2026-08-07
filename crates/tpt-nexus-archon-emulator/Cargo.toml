@@ -8,8 +8,9 @@ rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+keywords = ["capabilities", "microkernel", "memory-safety", "least-privilege", "enforcement"]
+categories = ["os", "embedded", "development-tools"]
+readme = "README.md"
 
 [dependencies]
 tpt-archon-core.workspace = true
