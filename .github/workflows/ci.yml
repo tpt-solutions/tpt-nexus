@@ -14,13 +14,13 @@ jobs:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check out sibling repos (tpt-telos, tpt-archon)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-telos
           path: ../tpt-telos
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-archon
           path: ../tpt-archon
@@ -38,12 +38,12 @@ jobs:
     name: nexus verify on examples
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-telos
           path: ../tpt-telos
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-archon
           path: ../tpt-archon
@@ -72,13 +72,13 @@ jobs:
             archon-ref: main
             rust: beta
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-telos
           ref: ${{ matrix.telos-ref }}
           path: ../tpt-telos
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-archon
           ref: ${{ matrix.archon-ref }}
