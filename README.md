@@ -77,7 +77,9 @@ siblings of the same parent directory:
 ```
 
 If a sibling is missing, `just setup` (or the CI workflow) will clone it for
-you. You also need a Rust toolchain (edition 2021, `rust-version` 1.74+). The
+you. You also need a Rust toolchain (edition 2021, `rust-version` 1.74+). For a
+zero-setup trial with no manual clone, build the included `Dockerfile`
+(`docker build -t nexus .`) or open the repo in the provided dev container. The
 default `verify` path is offline and requires no network access; only the
 optional `--compile` flag shells out to `cargo`, and the `llm` feature needs an
 LLM provider key.
@@ -93,7 +95,15 @@ cargo run -p tpt-nexus-cli -- verify examples/capability_boundary.telos
 cargo run -p tpt-nexus-cli -- verify examples/compiled_artifact.telos --compile
 
 # 3. Security-regression view: what changed about the capability surface?
-cargo run -p tpt-nexus-cli -- diff a.telos b.telos
+#    `diff_demo_after` adds a `ReadWrite` mutator on top of `diff_demo_before`,
+#    so this exits 1 (strengthening) — wire it as a CI gate.
+cargo run -p tpt-nexus-cli -- diff examples/diff_demo_before.telos examples/diff_demo_after.telos
+
+#    `nexus diff` exit codes: 0 = no change OR a *weakening* (a right was reduced,
+#    e.g. ReadWrite -> Read — a safe reduction, not a regression); 1 = a
+#    *strengthening* (a new ReadWrite or an escalation, a supply-chain alert);
+#    2 = a side could not be verified. Note a `Removed` function also returns 0,
+#    because dropping a capability is a reduction of the surface.
 
 # 4. Render the agent's reasoning trace as a shareable Markdown/HTML artifact.
 cargo run -p tpt-nexus-cli -- trace examples/monotonic_timestamp.telos
@@ -114,6 +124,15 @@ cargo run -p tpt-nexus-cli -- new my_service --template ledger
 
 # 8. Re-verify a file whenever it changes on disk.
 cargo run -p tpt-nexus-cli -- watch examples/monotonic_timestamp.telos
+
+# 9. Scaffold a `nexus.toml` policy in the current directory, then verify
+#    against it (forces the capability surface into version control).
+cargo run -p tpt-nexus-cli -- init
+cargo run -p tpt-nexus-cli -- verify examples/capability_boundary.telos --policy nexus.toml
+
+# 10. Diagnose your environment (sibling repos, toolchain, templates) before a
+#     build, so path-dep failures surface in plain language.
+cargo run -p tpt-nexus-cli -- doctor
 
 # Quality gate (also run in CI / pre-commit).
 cargo fmt --all -- --check

@@ -24,6 +24,15 @@ verify-examples:
     cargo run -q -p tpt-nexus-cli -- verify examples/monotonic_timestamp.telos
     cargo run -q -p tpt-nexus-cli -- verify examples/capability_boundary.telos
     cargo run -q -p tpt-nexus-cli -- verify examples/compiled_artifact.telos --compile
+    # Shipped starter templates are adoption fodder: they must always verify.
+    for t in counter ledger kv_store oracle rate_limiter multi_module; do \
+        cargo run -q -p tpt-nexus-cli -- verify "templates/$$t.telos"; \
+    done
+
+# Build the experimental WASM browser demo (needs wasm-pack + wasm32 target).
+wasm:
+    rustup target add wasm32-unknown-unknown
+    cd crates/tpt-nexus-wasm && wasm-pack build --target web --out-dir ../../pkg
 
 # Clone the sibling repos (tpt-telos, tpt-archon) into the parent directory if
 # they are missing, mirroring what CI does. Requires `git` and network access.

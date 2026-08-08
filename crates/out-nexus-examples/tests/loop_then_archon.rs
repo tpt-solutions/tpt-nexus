@@ -51,9 +51,11 @@ fn full_loop_mints_and_enforces_capabilities() {
     let process = emulator.process(pid).expect("loaded process exists");
     assert_eq!(process.grants.len(), 2);
 
-    let settle_page = process.page_of("settle").expect("settle has a page");
+    let settle_page = process
+        .page_of("Ledger::settle")
+        .expect("settle has a page");
     let query_page = process
-        .page_of("current_balance")
+        .page_of("Ledger::current_balance")
         .expect("query has a page");
     assert_eq!(
         process.grant_for(settle_page).unwrap().right,

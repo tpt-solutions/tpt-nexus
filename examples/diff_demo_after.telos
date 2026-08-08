@@ -1,0 +1,16 @@
+module Account {
+    invariant Account { balance >= 0 }
+
+    // Pure query: only reads state, so nexus derives `Read`.
+    func balance_of(a: Account)
+        requires a.balance >= 0
+        ensures a.balance >= 0
+    { let b = a.balance }
+
+    // New mutator: writes `balance`, so nexus now derives a `ReadWrite` grant.
+    // `nexus diff` flags this as a security regression (exit code 1).
+    func transfer(a: Account, amount: PositiveInt)
+        requires a.balance >= amount
+        ensures a.balance == old(a.balance) - amount
+    { mutate state { a.balance -= amount } }
+}

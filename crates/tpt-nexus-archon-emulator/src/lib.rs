@@ -57,7 +57,7 @@
 //! let pid = emulator.load_artifact(&artifact)?;
 //!
 //! // A function that never mutates state was granted `Right::Read` only.
-//! let page = emulator.process(pid).unwrap().page_of("current_balance").unwrap();
+//! let page = emulator.process(pid).unwrap().page_of("Ledger::current_balance").unwrap();
 //! let denied = emulator.handle_syscall(pid, SyscallRequest::WritePage {
 //!     block_id: page,
 //!     data: vec![0xFF],
@@ -88,10 +88,10 @@ pub use tpt_archon_core::page::PAGE_SIZE;
 /// Assert that a loaded process holds exactly the expected capability rights for
 /// a set of named functions — a one-line policy test against your own `.telos`.
 ///
-/// The macro looks each function up in the process's grant table (by bare
-/// function name, the same key the emulator mints under) and asserts the right
-/// it was granted equals what you expect. This is the intended way for a project
-/// to pin its capability surface in a regression test instead of hand-rolling
+/// The macro looks each function up in the process's grant table by its
+/// `module::func` key (e.g. `Ledger::settle`) and asserts the right it was
+/// granted equals what you expect. This is the intended way for a project to pin
+/// its capability surface in a regression test instead of hand-rolling
 /// `process().grant_for_function(...).right` assertions.
 ///
 /// # Example
@@ -104,8 +104,8 @@ pub use tpt_archon_core::page::PAGE_SIZE;
 /// let mut emulator = ArchonEmulator::new();
 /// let pid = emulator.load_artifact(&artifact).unwrap();
 /// assert_grants!(emulator, pid, {
-///     "settle"          => Right::ReadWrite,
-///     "current_balance" => Right::Read,
+///     "Ledger::settle"          => Right::ReadWrite,
+///     "Ledger::current_balance" => Right::Read,
 /// });
 /// ```
 #[macro_export]

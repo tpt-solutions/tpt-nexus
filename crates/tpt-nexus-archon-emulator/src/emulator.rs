@@ -1,7 +1,7 @@
 //! [`ArchonEmulator`]: [5. VALIDATE] -> [6. MINT] -> [7. EXECUTE].
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use tpt_archon_bridge::capability::{Capability, CapabilityIssuer, Resource, Right, SharedIssuer};
@@ -251,30 +251,34 @@ impl ArchonEmulator {
         // auto-derived map from `load_artifact`. Single source of truth shared
         // with `nexus verify`/`diff`.
 
-        // [6. MINT] One page capability per verified function.
+        // [6. MINT] One page capability per verified function, keyed by
+        // `module::func` so same-named functions in different modules stay
+        // distinct. `rights` is keyed identically (see `derive_rights`).
         let mut grants = Vec::new();
-        for func_name in artifact.manifest.functions.keys() {
-            let block_id = self.allocate_block()?;
+        for module in &artifact.telos.modules {
+            for item in &module.items {
+                if let Item::Func(func) = item {
+                    let func_name = format!("{}::{}", module.name, func.name);
+                    let block_id = self.allocate_block()?;
 
-            let right = rights
-                .get(func_name.as_str())
-                .copied()
-                .unwrap_or(Right::Read);
-            let capability = self
-                .issuer
-                .borrow_mut()
-                .mint(page_resource(block_id), right);
+                    let right = rights.get(&func_name).copied().unwrap_or(Right::Read);
+                    let capability = self
+                        .issuer
+                        .borrow_mut()
+                        .mint(page_resource(block_id), right);
 
-            tracing::info!(
-                func = %func_name, block_id, ?right,
-                "minted capability for verified function"
-            );
-            grants.push(Grant {
-                func_name: func_name.clone(),
-                block_id,
-                right,
-                capability,
-            });
+                    tracing::info!(
+                        func = %func_name, block_id, ?right,
+                        "minted capability for verified function"
+                    );
+                    grants.push(Grant {
+                        func_name,
+                        block_id,
+                        right,
+                        capability,
+                    });
+                }
+            }
         }
 
         let name = artifact
@@ -540,32 +544,35 @@ impl ArchonEmulator {
 /// allocation: `Right::ReadWrite` when the accepted body writes a struct
 /// field, otherwise `Right::Read`.
 ///
-/// Also the single guard against cross-module name collisions: grants and
-/// `page_of` are keyed by bare function name, so a name declared in more
-/// than one module is ambiguous and refused. Shared by `load_artifact` and
-/// the `tpt-nexus-cli` `verify`/`diff` commands so the derivation can never
-/// drift between runtime and reporting.
+/// Grants are keyed by `module::func` (e.g. `Counter::increment`) rather than
+/// the bare function name. This keeps functions that share a bare name across
+/// modules distinguishable, which the original bare-name keying could not do
+/// (it had to hard-reject the collision). Shared by `load_artifact`,
+/// `verify`, and `diff` so the derivation can never drift between runtime and
+/// reporting.
 pub fn derive_rights(artifact: &VerifiedArtifact) -> Result<BTreeMap<String, Right>, ArchonError> {
-    let mut counts: HashMap<&str, usize> = HashMap::new();
+    let mut rights: BTreeMap<String, Right> = BTreeMap::new();
     for module in &artifact.telos.modules {
         for item in &module.items {
             if let Item::Func(func) = item {
-                *counts.entry(func.name.as_str()).or_insert(0) += 1;
+                let key = format!("{}::{}", module.name, func.name);
+                // The right is derived from what the verified body proves. Names
+                // are unique within a module; telos collapses any cross-module
+                // duplicates into one record, so the first match is correct.
+                let mutates = artifact
+                    .functions()
+                    .iter()
+                    .find(|r| r.func_name == func.name)
+                    .map(|r| r.mutates_state)
+                    .unwrap_or(false);
+                let right = if mutates {
+                    Right::ReadWrite
+                } else {
+                    Right::Read
+                };
+                rights.insert(key, right);
             }
         }
-    }
-    if let Some((name, _)) = counts.iter().find(|(_, &c)| c > 1) {
-        return Err(ArchonError::AmbiguousFunctionName(name.to_string()));
-    }
-
-    let mut rights: BTreeMap<String, Right> = BTreeMap::new();
-    for record in artifact.functions() {
-        let right = if record.mutates_state {
-            Right::ReadWrite
-        } else {
-            Right::Read
-        };
-        rights.insert(record.func_name.clone(), right);
     }
     Ok(rights)
 }
@@ -655,8 +662,8 @@ mod tests {
         // One line pins the whole capability surface, derived from what each
         // function was proved to do.
         assert_grants!(emulator, pid, {
-            "settle" => Right::ReadWrite,
-            "read"   => Right::Read,
+            "L::settle" => Right::ReadWrite,
+            "L::read"   => Right::Read,
         });
     }
 
@@ -758,7 +765,11 @@ mod tests {
         assert_eq!(emulator.process_count(), 1);
 
         // The re-admitted process holds a capability that actually works.
-        let page = emulator.process(b).unwrap().page_of("increment").unwrap();
+        let page = emulator
+            .process(b)
+            .unwrap()
+            .page_of("C::increment")
+            .unwrap();
         let ok = emulator.handle_syscall(
             b,
             SyscallRequest::WritePage {
@@ -777,8 +788,10 @@ mod tests {
         let mut emulator = ArchonEmulator::new();
         let artifact = artifact(SINGLE_FUNC); // `increment` writes state -> ReadWrite
         let mut rights = derive_rights(&artifact).expect("derive rights");
-        // The policy pins `increment` down to `Read`, despite it being a mutator.
-        rights.insert("increment".to_string(), Right::Read);
+        // The policy pins `C::increment` down to `Read`, despite it being
+        // a mutator. Grants are keyed by `module::func`, so the override must
+        // use that key to take effect at mint time.
+        rights.insert("C::increment".to_string(), Right::Read);
 
         let pid = emulator
             .load_artifact_with_rights(&artifact, &rights)
@@ -786,7 +799,7 @@ mod tests {
         let page = emulator
             .process(pid)
             .unwrap()
-            .page_of("increment")
+            .page_of("C::increment")
             .expect("grant exists");
 
         let result = emulator.handle_syscall(
@@ -808,7 +821,11 @@ mod tests {
     fn with_page_exposes_the_zero_copy_borrow() {
         let mut emulator = ArchonEmulator::new();
         let pid = emulator.load_artifact(&artifact(SINGLE_FUNC)).unwrap();
-        let page = emulator.process(pid).unwrap().page_of("increment").unwrap();
+        let page = emulator
+            .process(pid)
+            .unwrap()
+            .page_of("C::increment")
+            .unwrap();
 
         // Write through the value-returning syscall...
         emulator
@@ -852,7 +869,11 @@ mod tests {
     fn oversized_write_is_rejected() {
         let mut emulator = ArchonEmulator::new();
         let pid = emulator.load_artifact(&artifact(SINGLE_FUNC)).unwrap();
-        let page = emulator.process(pid).unwrap().page_of("increment").unwrap();
+        let page = emulator
+            .process(pid)
+            .unwrap()
+            .page_of("C::increment")
+            .unwrap();
 
         let too_big = vec![0u8; PAGE_SIZE + 1];
         let err = emulator.handle_syscall(
@@ -869,21 +890,31 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_function_name_is_rejected() {
+    fn namespaced_grants_distinguish_same_named_functions() {
         let mut emulator = ArchonEmulator::new();
-        // telos accepted the collision (manifest collapsed it): nexus must
-        // refuse to mint rather than under-grant one of them. If telos itself
-        // rejected/panicked on the collision, the guard is belt-and-suspenders
-        // and the test is vacuously satisfied.
+        // Two modules each declare `shared`: namespacing must keep them
+        // distinct (`A::shared`, `B::shared`) instead of collapsing or
+        // rejecting. If telos itself rejects/panics on the collision, the
+        // behavior is moot and the test is vacuously satisfied.
         if let Ok(artifact) =
             NexusOrchestrator::new().run_agent_loop(COLLIDING_NAMES, &StaticAgent::new())
         {
+            let rights = derive_rights(&artifact).expect("derive rights");
             assert!(
-                matches!(
-                    emulator.load_artifact(&artifact),
-                    Err(ArchonError::AmbiguousFunctionName(_))
-                ),
-                "a name shared across modules must be rejected"
+                rights.contains_key("A::shared"),
+                "namespaced key A::shared must be present"
+            );
+            assert!(
+                rights.contains_key("B::shared"),
+                "namespaced key B::shared must be present"
+            );
+            let pid = emulator
+                .load_artifact(&artifact)
+                .expect("load namespaced artifact");
+            assert_eq!(
+                emulator.process(pid).unwrap().grants.len(),
+                2,
+                "two distinct namespaced grants should be minted"
             );
         }
     }

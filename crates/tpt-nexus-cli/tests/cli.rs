@@ -163,11 +163,11 @@ fn verify_policy_override_is_reflected_in_the_granted_right() {
 
     // The override must take effect: the table shows `Read`, not `ReadWrite`.
     assert!(
-        stdout.contains("increment` | Read |"),
-        "policy override should force `increment` to Read; got:\n{stdout}"
+        stdout.contains("Counter::increment` | Read |"),
+        "policy override should force `Counter::increment` to Read; got:\n{stdout}"
     );
     assert!(
-        !stdout.contains("increment` | ReadWrite |"),
+        !stdout.contains("Counter::increment` | ReadWrite |"),
         "policy override must not be cosmetic; ReadWrite should be gone"
     );
 
@@ -179,8 +179,8 @@ fn verify_policy_override_is_reflected_in_the_granted_right() {
         .expect("run nexus verify");
     let bare_out = String::from_utf8_lossy(&bare.stdout);
     assert!(
-        bare_out.contains("increment` | ReadWrite |"),
-        "without policy, increment is ReadWrite"
+        bare_out.contains("Counter::increment` | ReadWrite |"),
+        "without policy, Counter::increment is ReadWrite"
     );
 
     // The policy parsed by the CLI is the same one the test constructed.
@@ -192,4 +192,197 @@ fn verify_policy_override_is_reflected_in_the_granted_right() {
         "#,
     )
     .expect("policy parses");
+}
+
+#[test]
+fn init_scaffolds_a_policy_file() {
+    let tmp = TmpDir::new("init");
+    let out = Command::new(bin())
+        .current_dir(&tmp.0)
+        .args(["init"])
+        .output()
+        .expect("run nexus init");
+    assert!(out.status.success(), "init should succeed");
+    assert!(
+        tmp.path("nexus.toml").is_file(),
+        "nexus.toml scaffolded into cwd"
+    );
+    let body = std::fs::read_to_string(tmp.path("nexus.toml")).unwrap();
+    assert!(body.contains("agent"), "scaffolded policy has an agent key");
+}
+
+#[test]
+fn verify_warns_on_policy_grant_with_unknown_func() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    let telos = repo_root.join("examples/compiled_artifact.telos");
+    assert!(telos.exists(), "example exists");
+
+    let tmp = TmpDir::new("warn");
+    std::fs::write(
+        tmp.path("nexus.toml"),
+        r#"
+        agent = "static"
+        [[grant]]
+        func = "no_such_func"
+        right = "Read"
+        "#,
+    )
+    .unwrap();
+
+    let out = Command::new(bin())
+        .current_dir(&tmp.0)
+        .args(["verify", telos.to_str().unwrap(), "--policy", "nexus.toml"])
+        .output()
+        .expect("run nexus verify");
+    assert!(out.status.success(), "verify still succeeds");
+    // NB: tracing output is emitted on stdout in this build, so the warning
+    // (and the rendered table) are both captured there.
+    let captured = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        captured.contains("matches no verified function"),
+        "unknown policy func must be warned: {captured}"
+    );
+    // The phantom grant must not appear as a table row (the func name may still
+    // appear in the warning line above, which is expected).
+    assert!(
+        !captured.contains("| `no_such_func`"),
+        "unknown func must not be minted as a phantom grant row"
+    );
+}
+
+#[test]
+fn require_signature_gate_accepts_signed_attestation_and_rejects_divergent_source() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    let telos = repo_root.join("examples/compiled_artifact.telos");
+    assert!(telos.exists(), "example exists");
+
+    let tmp = TmpDir::new("sig");
+    let out_dir = tmp.path("out");
+    let manifest = out_dir.join("telos-proof.json");
+
+    // Produce a signed attestation.
+    let v = Command::new(bin())
+        .args([
+            "verify",
+            telos.to_str().unwrap(),
+            "--output",
+            out_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("verify to produce attestation");
+    assert!(v.status.success(), "verify succeeds");
+    assert!(manifest.is_file(), "attestation written");
+
+    let sign = Command::new(bin())
+        .args(["sign", manifest.to_str().unwrap()])
+        .output()
+        .expect("sign attestation");
+    assert!(sign.status.success(), "sign succeeds");
+    let pubkey = String::from_utf8_lossy(&sign.stdout)
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("public key :").map(str::trim))
+        .expect("public key printed")
+        .to_string();
+
+    // Re-verify against the trusted key: the existing signed artifact matches.
+    let ok = Command::new(bin())
+        .args([
+            "verify",
+            telos.to_str().unwrap(),
+            "--require-signature",
+            &pubkey,
+            "--output",
+            out_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("verify with signature");
+    assert!(
+        ok.status.success(),
+        "valid signed attestation must pass: {}",
+        String::from_utf8_lossy(&ok.stdout)
+    );
+
+    // A divergent source must be refused even though it still verifies.
+    let diverged = tmp.path("diverged.telos");
+    let original = std::fs::read_to_string(&telos).unwrap();
+    std::fs::write(
+        &diverged,
+        format!("{original}\n// comment changes the hash\n"),
+    )
+    .unwrap();
+    let bad = Command::new(bin())
+        .args([
+            "verify",
+            diverged.to_str().unwrap(),
+            "--require-signature",
+            &pubkey,
+            "--output",
+            out_dir.to_str().unwrap(),
+        ])
+        .output()
+        .expect("verify divergent source");
+    assert!(
+        !bad.status.success(),
+        "source diverging from the signed attestation must fail"
+    );
+    let captured = String::from_utf8_lossy(&bad.stdout);
+    assert!(
+        captured.contains("describes a different source"),
+        "failure should name the source divergence: {captured}"
+    );
+}
+
+#[test]
+fn fuzz_reports_no_violations_for_a_clean_artifact() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    let telos = repo_root.join("examples/compiled_artifact.telos");
+    assert!(telos.exists(), "example exists");
+
+    let out = Command::new(bin())
+        .args(["fuzz", telos.to_str().unwrap()])
+        .output()
+        .expect("run nexus fuzz");
+    assert!(out.status.success(), "fuzz should pass on a clean artifact");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("0 violation(s)"),
+        "a clean artifact must have a tight grant set: {stdout}"
+    );
+}
+
+#[test]
+fn verify_emits_sarif_for_code_scanning() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    let telos = repo_root.join("examples/capability_boundary.telos");
+    assert!(telos.exists(), "example exists");
+
+    let tmp = TmpDir::new("sarif");
+    let sarif_path = tmp.path("caps.sarif");
+    let out = Command::new(bin())
+        .args([
+            "verify",
+            telos.to_str().unwrap(),
+            "--sarif",
+            sarif_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run nexus verify --sarif");
+    assert!(out.status.success(), "verify --sarif succeeds");
+    assert!(sarif_path.is_file(), "SARIF file written");
+
+    let sarif = std::fs::read_to_string(&sarif_path).unwrap();
+    assert!(sarif.contains("\"version\": \"2.1.0\""), "SARIF 2.1.0 document");
+    assert!(sarif.contains("\"runs\""), "SARIF has runs");
+    assert!(
+        sarif.contains("nexus/capability"),
+        "SARIF reports capability rules"
+    );
 }

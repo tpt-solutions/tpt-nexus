@@ -325,6 +325,90 @@ review plan; this section is the execution checklist.
 - [x] `CONTRIBUTING.md` (translate `AGENTS.md` for human contributors) +
    minimal `.github/ISSUE_TEMPLATE/` and `PULL_REQUEST_TEMPLATE.md`.
 - [x] Dependabot config for third-party deps (not the intentionally-unpinned
-   sibling path deps).
+    sibling path deps).
+
+---
+
+## 12. Review findings (session 3) — adoption, CI, usability, innovation
+
+A third review (independent read of the CLI, emulator, orchestrator, CI action,
+and a smoke test of all six shipped templates — all verify green) confirmed the
+§10/§11 "done" claims hold up. The remaining work is wiring the headline
+innovations into CI/adoption, closing a few real gaps, and adding ambitious
+differentiators. Tracked here so nothing regresses to "looks done, isn't."
+
+### 12.1 Bugs / gaps (fix first)
+
+- [x] **`nexus-verify` composite action is a stub for its own value prop.**
+    `.github/actions/nexus-verify/action.yml` declares `fail-on-strengthening`
+    and `comment` but never uses them — it runs `nexus verify` and posts static
+    boilerplate, never `nexus diff`, never the real capability table. Wire
+    `nexus diff` (base↔head), honor `fail-on-strengthening`, and post the actual
+    derived table as the PR comment. → action.yml now runs `nexus diff` per file,
+    gates on `fail-on-strengthening`, and posts the per-file capability table.
+- [x] **`nexus verify` never checks signatures.** `sign`/`verify-signature`
+    exist, but there is no `nexus verify --require-signature --pubkey <hex>`
+    [--sig <path>], so a CI gate cannot enforce "must be signed by a trusted
+    key". Add the flag; read `<out>/telos-proof.json[.sig]` and verify, failing
+    verify (non-zero) when missing/invalid. → `verify --require-signature <pubkey>`
+    validates the *existing* signed attestation against the verified source
+    (signature + source_hash match) without overwriting the signed artifact.
+- [x] **Policy over-specification is silent.** `Policy::apply` inserts a
+    `[[grant]]` for a func name not in the artifact with no warning — a typo'd
+    func is a silent no-op. Warn (tracing) for each policy grant whose func is
+    absent from the derived grant set. → `apply` now only overrides existing
+    derived rights (no phantom grants), and `verify` warns on unknown funcs.
+- [ ] **Document `nexus diff` exit semantics for a *weakening*.** `ReadWrite→Read`
+    currently returns exit 0 (clean); acceptable (it is a reduction) but the
+    README/help must say so explicitly.
+
+### 12.2 Missing features
+
+- [ ] **Namespaced grants (`module::func`).** `derive_rights` (emulator.rs:548)
+    *rejects* duplicate func names across modules, so `multi_module.telos`
+    dodges the interesting case with unique names. Real multi-module support
+    (distinct grants per `module::func`, not a hard reject) is the genuine
+    differentiator. Touches derive_rights, `load_artifact` keying, `page_of`,
+    policy matching, and the `assert_grants!` macro.
+- [x] **`nexus init`** — scaffold a `nexus.toml` (from `templates/nexus.toml`)
+    into the current directory, optionally with a starter `.telos`. → `nexus init`
+    copies `templates/nexus.toml` to `./nexus.toml` (`--force` to overwrite).
+- [ ] **SARIF output** for `verify`/`diff` (besides `--json`) so findings show
+    in GitHub code-scanning / Security tab.
+- [x] **`nexus doctor`** — diagnose missing siblings (`../tpt-telos`,
+    `../tpt-archon`), the Rust toolchain, the `templates/` dir, and a local
+    `nexus.toml` *before* a cryptic cargo path-dep error. Exit non-zero on
+    problems. → `nexus doctor` reports each check and exits non-zero on failure.
+- [x] **Zero-setup trial.** Path deps force a manual 3-repo clone. Add a
+    `Dockerfile` + `.devcontainer.json` (and/or a git-submodule bootstrap) so
+    `git clone` + one command runs the whole loop with no manual sibling clone.
+    → `Dockerfile` clones both siblings; `.devcontainer/` wraps it.
+
+### 12.3 Innovations (differentiators)
+
+- [ ] **Capability fuzzing / adversarial escalation tester** — auto-generate
+    syscall sequences against a loaded artifact to prove the derived grant set
+    is *tight* (complements `assert_grants!`). High-value and on-theme.
+- [ ] **`nexus serve`** — a tiny static viewer for the existing HTML trace
+    (trace.rs) so reviews/demos are shareable without the CLI.
+- [ ] **VS Code extension** — `.telos` syntax highlighting + inline
+    `nexus verify` on save (reuses the `watch` logic).
+- [ ] **WASM build** for an in-browser verify→attest→mint→execute demo.
+- [ ] **Policy-diff PR bot** — comment the security delta (subsumed by the
+    §12.1 action fix, but call it out as the end state).
+
+### 12.4 Usability / automation / adoption
+
+- [x] **README Quickstart** uses placeholder `nexus diff a.telos b.telos`
+    (main.rs:96). Ship a real before/after pair so the regression view is
+    copy-pasteable. → `examples/diff_demo_before.telos` / `diff_demo_after.telos`
+    + README step 3.
+- [x] **README `verify --policy` example** using the shipped `templates/nexus.toml`.
+    → README steps 9–10 (`nexus init` + `verify --policy nexus.toml`) and `doctor`.
+- [x] **CI `verify-examples` just recipe** (justfile:23) covers `examples/`;
+    extend it to loop over `templates/` so shipped scaffolds cannot rot. → justfile
+    `verify-examples` now loops the six templates.
+- [ ] **Publish/install path:** `cargo install`, Homebrew tap, or prebuilt
+    binaries once the repo is public (path deps block `cargo install` today).
 
 

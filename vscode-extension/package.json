@@ -1,0 +1,43 @@
+{
+  "name": "nexus-telos",
+  "displayName": "tpt-nexus / .telos",
+  "description": "Syntax highlighting and `nexus verify` integration for .telos intent files.",
+  "version": "0.1.0",
+  "publisher": "tpt-nexus",
+  "engines": { "vscode": "^1.70.0" },
+  "categories": ["Programming Languages", "Linters"],
+  "activationEvents": ["onLanguage:telos", "onCommand:nexus.verify"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "telos",
+        "aliases": ["telos", ".telos"],
+        "extensions": [".telos"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "telos",
+        "scopeName": "source.telos",
+        "path": "./syntaxes/telos.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "nexus.verify",
+        "title": "nexus: Verify current .telos file"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "nexus.verify",
+          "when": "resourceExtname == .telos",
+          "group": "navigation"
+        }
+      ]
+    }
+  }
+}

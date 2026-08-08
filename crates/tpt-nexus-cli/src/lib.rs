@@ -4,6 +4,7 @@
 //! without invoking the argument parser.
 
 pub mod policy;
+pub mod sarif;
 pub mod signing;
 pub mod trace;
 
@@ -44,6 +45,23 @@ pub fn select_agent() -> Box<dyn CodeAgent> {
     Box::new(StaticAgent::new())
 }
 
+/// Resolve a policy `func` entry to a key in a derived grant set.
+///
+/// Grants are keyed by `module::func` (e.g. `Counter::increment`), but a policy
+/// author working on a single-module program should be able to write the bare
+/// `func` name. This resolves either form: an exact `module::func` match wins,
+/// otherwise the first key whose bare suffix is `func` (e.g. `Counter::increment`
+/// for `increment`). Returns `None` when neither matches.
+pub fn resolve_grant_key(rights: &BTreeMap<String, Right>, func: &str) -> Option<String> {
+    if let Some(key) = rights.get_key_value(func) {
+        return Some(key.0.clone());
+    }
+    rights
+        .keys()
+        .find(|k| k.ends_with(&format!("::{func}")))
+        .cloned()
+}
+
 /// A capability that changed between two versions of a program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RightChange {
@@ -80,7 +98,7 @@ impl CapabilityDiff {
 }
 
 /// Whether `to` is a stronger capability than `from`.
-fn strengthens(from: Right, to: Right) -> bool {
+pub fn strengthens(from: Right, to: Right) -> bool {
     matches!(
         (from, to),
         (Right::Read, Right::ReadWrite)

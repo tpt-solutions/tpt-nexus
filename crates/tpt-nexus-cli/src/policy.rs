@@ -100,12 +100,21 @@ impl Policy {
         Box::new(StaticAgent::new())
     }
 
-    /// Overlay this policy's right overrides on a derived grant set. Functions
-    /// not named in the policy keep their derived right.
+    /// Overlay this policy's right overrides on a derived grant set. A policy can
+    /// only *override* the right of a function that was actually derived — it
+    /// cannot mint a grant for a function that does not exist (a typo'd `func` is
+    /// therefore a no-op, surfaced by the caller's warning rather than invented
+    /// as a phantom grant).
+    ///
+    /// A `func` entry matches either the exact `module::func` grant key or, for
+    /// ergonomics in single-module programs, the bare `func` name (resolved via
+    /// [`resolve_grant_key`](crate::resolve_grant_key)).
     pub fn apply(&self, mut rights: BTreeMap<String, Right>) -> BTreeMap<String, Right> {
         for g in &self.grant {
             if let Ok(right) = parse_right(&g.right) {
-                rights.insert(g.func.clone(), right);
+                if let Some(key) = crate::resolve_grant_key(&rights, &g.func) {
+                    rights.insert(key, right);
+                }
             }
         }
         rights

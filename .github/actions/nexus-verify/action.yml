@@ -65,17 +65,41 @@ runs:
       id: verify
       shell: bash
       run: |
+        set -euo pipefail
         changed=$(git diff --name-only --diff-filter=ACMR origin/${{ github.base_ref }}...HEAD -- '*.telos' || true)
         if [ -z "$changed" ]; then
           echo "no .telos files changed"
           exit 0
         fi
         status=0
+        table="## tpt-nexus capability surface\n\n"
         for f in $changed; do
           echo "::group::nexus verify $f"
           ./target/debug/nexus verify "$f" --compile || status=1
           echo "::endgroup::"
+
+          # Render the derived capability table for the PR comment.
+          table="$table### \`$f\`\n\n"
+          table="$table$(./target/debug/nexus verify "$f" --json | python3 -c 'import sys,json; d=json.load(sys.stdin); print("\n".join(f"| `{k}` | {v} |" for k,v in d.get("grants",{}).items()) or "(no functions)")' 2>/dev/null || echo "(table unavailable)")\n\n"
+
+          # Security-regression gate: diff against the base branch.
+          if [ "${{ inputs.fail-on-strengthening }}" = "true" ]; then
+            base=$(git show "origin/${{ github.base_ref }}:$f" 2>/dev/null || true)
+            if [ -n "$base" ]; then
+              tmp=$(mktemp)
+              printf '%s\n' "$base" > "$tmp"
+              echo "::group::nexus diff $f (base..head)"
+              ./target/debug/nexus diff "$tmp" "$f" || status=1
+              echo "::endgroup::"
+              rm -f "$tmp"
+            fi
+          fi
         done
+        {
+          echo "table<<EOF"
+          printf '%s\n' "$table"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
         exit $status
 
     - name: Post capability table as a PR comment
@@ -84,7 +108,7 @@ runs:
       with:
         header: nexus-capabilities
         message: |
-          ## tpt-nexus capability surface
+          ${{ steps.verify.outputs.table }}
           Run `nexus verify <file>.telos` locally to reproduce. A `ReadWrite`
           grant means the function was proved to write state; `Read` means it is
           a pure query. See the README "How grants are derived" section.

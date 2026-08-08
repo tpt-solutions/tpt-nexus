@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "telos",
+  "scopeName": "source.telos",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#keywords" },
+    { "include": "#strings" },
+    { "include": "#numbers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.telos", "match": "//.*$" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.telos",
+          "match": "\\b(module|func|invariant|requires|ensures|mutate|state|if|else|match|let|return)\\b"
+        },
+        {
+          "name": "support.type.telos",
+          "match": "\\b(Int|PositiveInt|Bool|Account|Counter|Log|Store|Bucket|Ledger)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.telos",
+      "begin": "\"",
+      "end": "\""
+    },
+    "numbers": {
+      "name": "constant.numeric.telos",
+      "match": "\\b[0-9]+\\b"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "tpt-nexus",
+  "build": {
+    "dockerfile": "../Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": []
+    }
+  },
+  "postStartCommand": "cargo build -p tpt-nexus-cli",
+  "remoteUser": "root"
+}
