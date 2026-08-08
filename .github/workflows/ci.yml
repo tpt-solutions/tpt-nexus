@@ -82,7 +82,7 @@ jobs:
   # toolchain; if a bump breaks the integration, this job fails before the change
   # is merged. Add rows here when a released sibling tag should be tracked.
   compatibility-matrix:
-    name: compat (${{ matrix.telos-ref }} / ${{ matrix.archon-ref }} / ${{ matrix.rust }})
+    name: compatibility matrix
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

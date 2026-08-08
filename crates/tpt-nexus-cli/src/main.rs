@@ -3,6 +3,9 @@
 //! Subcommands:
 //! * `verify <file.telos>` — run the INTENT→VERIFY→ATTEST loop, print the
 //!   derived capability table, and write the attestation to disk.
+//! * `run <file.telos>` — load a verified artifact into Archon and drive
+//!   read/write syscalls against the live process (stage 7): a tightness gate
+//!   by default, or an interactive REPL / scripted `--op` probe.
 //! * `diff <a.telos> <b.telos>` — show the capability delta between two
 //!   versions (security-regression view).
 //! * `trace <file.telos>` — render the agent's full reasoning trace as a
@@ -40,11 +43,11 @@ fn diff_error() -> ExitCode {
 }
 
 use tpt_nexus_archon_emulator::{
-    derive_rights, ArchonEmulator, ArchonError, Grant, SyscallRequest,
+    derive_rights, ArchonEmulator, ArchonError, Grant, ProcessId, SyscallRequest,
 };
 use tpt_nexus_cli::{
-    capability_diff, render_capability_table, render_trace_html, render_trace_markdown,
-    resolve_grant_key, run_and_derive,
+    capability_diff, load_into_archon, render_capability_table, render_trace_html,
+    render_trace_markdown, resolve_grant_key, run_and_derive,
     sarif::{sarif_for_diff, sarif_for_rights, to_string as sarif_to_string},
     select_agent, signing, Policy,
 };
@@ -179,6 +182,35 @@ enum Command {
         #[arg(long)]
         pubkey: String,
     },
+    /// Load a `.telos` into Archon and exercise its capability surface.
+    ///
+    /// Runs INTENT→VERIFY→ATTEST, mints the derived capabilities into a live
+    /// `ArchonEmulator`, and drives `ReadPage`/`WritePage` syscalls against the
+    /// loaded process (stage 7). By default it auto-exercises every granted
+    /// capability (the allowed direction must succeed; the forbidden direction,
+    /// if any, must be denied) and is a CI gate: it exits non-zero if a grant is
+    /// not tight. `--op` scripts individual operations; `--interactive` opens a
+    /// REPL over stdin.
+    Run {
+        /// Path to the `.telos` source to load and run.
+        path: PathBuf,
+        /// Apply a `nexus.toml` policy (right overrides).
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        /// Also run `cargo build` on the generated crate and report real bytes.
+        #[arg(long)]
+        compile: bool,
+        /// Open an interactive REPL over stdin (read/write/grants/quit).
+        #[arg(long, short)]
+        interactive: bool,
+        /// Scripted operations, one per `--op`, in the same form as the REPL:
+        /// `"read Ledger::settle"` or `"write Ledger::settle balance=42"`.
+        #[arg(long = "op")]
+        ops: Vec<String>,
+        /// Directory to write the attestation into (default: `nexus-out`).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -232,6 +264,21 @@ fn main() -> ExitCode {
             signature,
             pubkey,
         } => verify_signature(&manifest, &signature, &pubkey),
+        Command::Run {
+            path,
+            policy,
+            compile,
+            interactive,
+            ops,
+            output,
+        } => run(RunOpts {
+            path: &path,
+            policy_path: policy.as_deref(),
+            compile,
+            interactive,
+            ops,
+            output: output.as_deref(),
+        }),
     }
 }
 
@@ -412,6 +459,302 @@ fn verify(opts: VerifyOpts) -> ExitCode {
         );
     }
     ExitCode::SUCCESS
+}
+
+/// Bundled options for [`run`], kept in one struct so the CLI entry point stays
+/// under the clippy `too-many-arguments` budget as flags grow.
+struct RunOpts<'a> {
+    path: &'a std::path::Path,
+    policy_path: Option<&'a std::path::Path>,
+    compile: bool,
+    interactive: bool,
+    ops: Vec<String>,
+    output: Option<&'a std::path::Path>,
+}
+
+/// `nexus run`: load a verified artifact into Archon and drive syscalls against
+/// it. This is the only CLI command that keeps a loaded process alive past mint,
+/// so the capability surface it derived can actually be *exercised* (stage 7) —
+/// `verify` mints and immediately drops the emulator.
+fn run(opts: RunOpts) -> ExitCode {
+    let RunOpts {
+        path,
+        policy_path,
+        compile,
+        interactive,
+        ops,
+        output,
+    } = opts;
+
+    let (artifact, rights, mut emulator, pid) =
+        match load_into_archon(path, policy_path, select_agent().as_ref(), compile) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                tracing::error!("cannot load {} into Archon: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        };
+
+    let minted = emulator.process(pid).map(|p| p.grants.len()).unwrap_or(0);
+    println!(
+        "loaded {} function(s) -> {} capability grant(s) into Archon process {pid}",
+        rights.len(),
+        minted
+    );
+
+    // [6. MINT] confirmed; the attestation reflects the very source we loaded.
+    if let Some(out) = output {
+        if let Err(e) = artifact.write_attestation(out) {
+            tracing::warn!("could not write attestation: {e}");
+        } else {
+            println!("attestation -> {}", out.join("telos-proof.json").display());
+        }
+    }
+
+    // Stage 7 routing: interactive REPL, scripted `--op` list, or the default
+    // tightness demo (allowed op must succeed, forbidden op must be denied).
+    let regression = if interactive {
+        run_repl(&mut emulator, pid)
+    } else if !ops.is_empty() {
+        for op in &ops {
+            run_one(&mut emulator, pid, op);
+        }
+        false
+    } else {
+        run_demo(&mut emulator, pid)
+    };
+
+    println!(
+        "\nArchon process {pid} still live; run `nexus run {} --interactive` to drive it.",
+        path.display()
+    );
+
+    if regression {
+        tracing::error!("capability surface is NOT tight (see violations above)");
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// Default mode: for every granted capability, perform the operation its right
+/// permits (must succeed) and, if a direction is *not* granted, perform that
+/// forbidden operation (must be refused). Returns true on any regression.
+fn run_demo(emulator: &mut ArchonEmulator, pid: ProcessId) -> bool {
+    banner_run("7. EXECUTE", "every grant is exercised against its right");
+    let Some(process) = emulator.process(pid) else {
+        println!("  (process vanished after load)");
+        return true;
+    };
+    let grants: Vec<Grant> = process.grants.clone();
+    let mut regression = false;
+
+    for g in &grants {
+        // Allowed direction must succeed.
+        let allowed = if g.right.allows_write() {
+            SyscallRequest::WritePage {
+                block_id: g.block_id,
+                data: format!("{}=ok", g.func_name).into_bytes(),
+            }
+        } else {
+            SyscallRequest::ReadPage {
+                block_id: g.block_id,
+            }
+        };
+        let allowed_name = allowed.name();
+        match emulator.handle_syscall(pid, allowed) {
+            Ok(_) => println!(
+                "  ALLOWED  {} (page {})  <- {}  [{}]",
+                allowed_name,
+                g.block_id,
+                g.func_name,
+                right_word(g.right)
+            ),
+            Err(e) => {
+                regression = true;
+                println!(
+                    "  VIOLATION allowed {} on {} was DENIED: {e}",
+                    allowed_name, g.func_name
+                );
+            }
+        }
+
+        // Forbidden direction (if any) must be refused. Only one direction is
+        // ever ungranted for the rights `derive_rights` emits (Read or
+        // ReadWrite), but the check is written generally.
+        let forbidden: Option<SyscallRequest> = if !g.right.allows_write() {
+            Some(SyscallRequest::WritePage {
+                block_id: g.block_id,
+                data: b"x".to_vec(),
+            })
+        } else if !g.right.allows_read() {
+            Some(SyscallRequest::ReadPage {
+                block_id: g.block_id,
+            })
+        } else {
+            None
+        };
+        if let Some(op) = forbidden {
+            let op_name = op.name();
+            match emulator.handle_syscall(pid, op) {
+                Err(ArchonError::CapabilityViolation { .. }) => println!(
+                    "  DENIED   {} (page {})  -> CapabilityViolation  [{}]",
+                    op_name, g.block_id, g.func_name,
+                ),
+                Err(other) => println!(
+                    "  DENIED   {} (page {})  -> {other} (refused, non-capability error)",
+                    op_name, g.block_id
+                ),
+                Ok(_) => {
+                    regression = true;
+                    println!(
+                        "  VIOLATION forbidden {} on {} was ALLOWED",
+                        op_name, g.func_name
+                    );
+                }
+            }
+        }
+    }
+    regression
+}
+
+/// Interactive REPL over stdin. Returns true only if a regression was observed
+/// (it is not, here — interactive mode only reports; it is a manual probe).
+fn run_repl(emulator: &mut ArchonEmulator, pid: ProcessId) -> bool {
+    banner_run("7. EXECUTE (interactive)", "read/write/grants/quit");
+    println!("  commands: read <page|func> | write <page|func> <data> | grants | quit");
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        print!("archon[{pid}]> ");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        if stdin.read_line(&mut line).is_err() {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed == "quit" || trimmed == "exit" {
+            break;
+        }
+        run_one(emulator, pid, trimmed);
+    }
+    false
+}
+
+/// Execute one REPL/`-op` line: `read <target>`, `write <target> <data>`,
+/// `grants`. `target` is a page number or a function name (resolved via
+/// `page_of`). Returns `true` only on the syntax errors that stop a scripted
+/// run early; syscall denials/allowances are reported, not tallied.
+fn run_one(emulator: &mut ArchonEmulator, pid: ProcessId, line: &str) -> bool {
+    let mut parts = line.split_whitespace();
+    let Some(cmd) = parts.next() else {
+        return false;
+    };
+    match cmd {
+        "grants" => {
+            if let Some(p) = emulator.process(pid) {
+                for g in &p.grants {
+                    println!(
+                        "  page {:>2}  {:?}  <- {}",
+                        g.block_id, g.right, g.func_name
+                    );
+                }
+            }
+            false
+        }
+        "read" => {
+            let Some(target) = parts.next() else {
+                println!("  usage: read <page|func>");
+                return false;
+            };
+            let Some(page) = resolve_page(emulator, pid, target) else {
+                println!("  cannot resolve `{target}` to a granted page");
+                return false;
+            };
+            match emulator.handle_syscall(pid, SyscallRequest::ReadPage { block_id: page }) {
+                Ok(resp) => println!(
+                    "  ALLOWED  read_page(page {page}) -> {} byte(s): {}",
+                    resp.as_page().map(<[u8]>::len).unwrap_or(0),
+                    hex(resp.as_page().unwrap_or(&[]))
+                ),
+                Err(ArchonError::CapabilityViolation { held, .. }) => {
+                    println!(
+                        "  DENIED   read_page(page {page}) -> CapabilityViolation (holds {held:?})"
+                    )
+                }
+                Err(e) => println!("  ERROR    read_page(page {page}) -> {e}"),
+            }
+            false
+        }
+        "write" => {
+            let Some(target) = parts.next() else {
+                println!("  usage: write <page|func> <data>");
+                return false;
+            };
+            let data: Vec<u8> = parts.collect::<Vec<_>>().join(" ").into_bytes();
+            let Some(page) = resolve_page(emulator, pid, target) else {
+                println!("  cannot resolve `{target}` to a granted page");
+                return false;
+            };
+            match emulator.handle_syscall(
+                pid,
+                SyscallRequest::WritePage {
+                    block_id: page,
+                    data,
+                },
+            ) {
+                Ok(resp) => println!(
+                    "  ALLOWED  write_page(page {page}) -> {} byte(s)",
+                    resp.written_len().unwrap_or(0)
+                ),
+                Err(ArchonError::CapabilityViolation { held, .. }) => {
+                    println!("  DENIED   write_page(page {page}) -> CapabilityViolation (holds {held:?})")
+                }
+                Err(e) => println!("  ERROR    write_page(page {page}) -> {e}"),
+            }
+            false
+        }
+        other => {
+            println!("  unknown command `{other}` (read/write/grants/quit)");
+            false
+        }
+    }
+}
+
+/// Resolve a REPL/`--op` target to a page: a decimal page number, else a
+/// function name looked up in the process's grant table.
+fn resolve_page(emulator: &ArchonEmulator, pid: ProcessId, token: &str) -> Option<u64> {
+    if let Ok(n) = token.parse::<u64>() {
+        return Some(n);
+    }
+    emulator.process(pid).and_then(|p| p.page_of(token))
+}
+
+/// Short right label for the demo table.
+fn right_word(right: Right) -> &'static str {
+    match right {
+        Right::Read => "Read",
+        Right::Write => "Write",
+        Right::ReadWrite => "ReadWrite",
+    }
+}
+
+/// Hex-encode bytes for readable read output.
+fn hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// A small section banner, mirroring the style used by the runnable examples.
+fn banner_run(title: &str, sub: &str) {
+    println!("\n{title}: {sub}");
 }
 
 fn trace(path: &std::path::Path, html: bool) -> ExitCode {
@@ -970,35 +1313,14 @@ fn check_signed_attestation(
 /// granted capability permits exactly what its right allows, and nothing else is
 /// permitted. A randomized pass plus a deterministic per-grant check.
 fn fuzz(path: &std::path::Path, iterations: usize) -> ExitCode {
-    let source = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("cannot read {}: {e}", path.display());
-            return ExitCode::FAILURE;
-        }
-    };
-    let artifact = match NexusOrchestrator::new().run_agent_loop(&source, select_agent().as_ref()) {
-        Ok(a) => a,
-        Err(e) => {
-            tracing::error!("fuzz: verify failed: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let rights = match derive_rights(&artifact) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("fuzz: cannot derive capabilities: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut emulator = ArchonEmulator::new();
-    let pid = match emulator.load_artifact_with_rights(&artifact, &rights) {
-        Ok(pid) => pid,
-        Err(e) => {
-            tracing::error!("fuzz: cannot mint capabilities: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let (_artifact, _rights, mut emulator, pid) =
+        match load_into_archon(path, None, select_agent().as_ref(), false) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                tracing::error!("fuzz: cannot verify + load {}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        };
     let grants: Vec<Grant> = match emulator.process(pid) {
         Some(p) => p.grants.clone(),
         None => {

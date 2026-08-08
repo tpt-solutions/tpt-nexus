@@ -540,4 +540,41 @@ as-is with no new/harder example needed.
       8-iteration cap and its replies parse as a bare `mutate state { ... }`
       block before locking a model choice into the CI workflow.
 
+---
+
+### 13.6 `nexus run` — load a `.telos` into Archon and exercise it (session 5)
+
+`nexus verify` runs INTENT→VERIFY→ATTEST and mints the capabilities but drops the
+`ArchonEmulator` immediately, so nothing executes (stage 7). The full load **and**
+execute path only existed as Rust (the `example2` binary + `loop_then_archon` e2e
+test). Added a CLI command that keeps the loaded process alive and drives
+`ReadPage`/`WritePage` syscalls, closing the gap. Build order: lib helper → `run`
+command → refactor `fuzz` onto the shared helper → docs/tests.
+
+- [x] Shared load helper `tpt_nexus_cli::load_into_archon(path, policy, agent, compile)`
+      (lib.rs): runs the loop, derives rights, applies policy overrides, and mints
+      into a **live** `ArchonEmulator`, returning `(VerifiedArtifact, rights,
+      emulator, pid)`. Single source of truth for the mint path, shared by `run`
+      and `fuzz` so derivation can't drift.
+- [x] `nexus run <file.telos>` subcommand (main.rs): loads, then stage-7 routing:
+  - [x] **Demo (default, CI gate):** for every granted capability, the allowed
+        direction must succeed and the forbidden direction (if any) must be
+        denied via `CapabilityViolation`; exits non-zero on any regression.
+  - [x] **`--interactive` REPL:** `read <page|func>` / `write <page|func> <data>` /
+        `grants` / `quit` over stdin; target resolves as a page number or a
+        `module::func` name.
+  - [x] **`--op "..."` scripted ops:** same form as the REPL, repeatable.
+  - [x] `--policy <nexus.toml>` right overrides and `--output <dir>` attestation
+        write, mirroring `verify`.
+- [x] Refactor `nexus fuzz` onto `load_into_archon` (removes duplicated
+      loop+derive+mint logic).
+- [x] Unit test `load_into_archon_mints_namespaced_grants` (lib.rs) asserting the
+      `Ledger::settle`→`ReadWrite` / `Ledger::current_balance`→`Read` surface and
+      that the mutator grant services a real write.
+- [x] README "Run it" gets a `nexus run` subsection; module doc comment in
+      `main.rs` lists `run`.
+- [x] `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+      `cargo test --workspace` all green; manual smoke test of demo / `--op` /
+      `--interactive` against `examples/capability_boundary.telos` passes.
+
 

@@ -12,8 +12,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use tpt_archon_bridge::capability::Right;
-use tpt_nexus_archon_emulator::derive_rights;
-use tpt_nexus_orchestrator::{CodeAgent, NexusError, NexusOrchestrator, StaticAgent};
+use tpt_nexus_archon_emulator::{derive_rights, ArchonEmulator, ProcessId};
+use tpt_nexus_orchestrator::{
+    BuildPolicy, CodeAgent, NexusError, NexusOrchestrator, StaticAgent, VerifiedArtifact,
+};
 
 pub use policy::Policy;
 pub use signing::Keypair;
@@ -132,6 +134,66 @@ pub fn capability_diff(a: &BTreeMap<String, Right>, b: &BTreeMap<String, Right>)
     diff
 }
 
+/// Run the full verify loop on `path`, derive the capability set, apply any
+/// policy overrides, and **mint** the capabilities into a live `ArchonEmulator`
+/// (stages 5–6). Returns the verified artifact, the rights that were minted, the
+/// live emulator, and the `ProcessId` it was loaded under.
+///
+/// Unlike [`run_and_derive`], this keeps the emulator alive so the caller can go
+/// on to drive syscalls against the loaded process (stage 7). It is the shared
+/// load path for `nexus run` and `nexus fuzz`, so the minting policy can never
+/// drift between the two.
+///
+/// `agent` is injected so deterministic tests can pass a [`StaticAgent`] while
+/// the CLI passes [`select_agent`].
+pub fn load_into_archon(
+    path: &Path,
+    policy_path: Option<&Path>,
+    agent: &dyn CodeAgent,
+    compile: bool,
+) -> Result<
+    (
+        VerifiedArtifact,
+        BTreeMap<String, Right>,
+        ArchonEmulator,
+        ProcessId,
+    ),
+    NexusError,
+> {
+    let source = std::fs::read_to_string(path)?;
+
+    let policy = match policy_path.map(Policy::load) {
+        Some(Ok(p)) => Some(p),
+        Some(Err(e)) => return Err(NexusError::Policy(format!("cannot load policy: {e}"))),
+        None => None,
+    };
+
+    let mut orchestrator = NexusOrchestrator::new();
+    if compile {
+        orchestrator = orchestrator.with_build_policy(BuildPolicy::Compile);
+    }
+    let artifact = orchestrator.run_agent_loop(&source, agent)?;
+
+    let derived = derive_rights(&artifact).map_err(|e| match e {
+        tpt_nexus_archon_emulator::ArchonError::AmbiguousFunctionName(name) => {
+            NexusError::AmbiguousFunctionName(name)
+        }
+        other => NexusError::Policy(format!("{other}")),
+    })?;
+
+    let rights = match policy.as_ref() {
+        Some(p) => p.apply(derived),
+        None => derived,
+    };
+
+    let mut emulator = ArchonEmulator::new();
+    let pid = emulator
+        .load_artifact_with_rights(&artifact, &rights)
+        .map_err(|e| NexusError::Policy(format!("cannot mint capabilities: {e}")))?;
+
+    Ok((artifact, rights, emulator, pid))
+}
+
 /// Run the full verify loop on `path` and return the derived capability set
 /// (function name -> right). Fails if the program does not verify.
 pub fn run_and_derive(path: &Path) -> Result<BTreeMap<String, Right>, NexusError> {
@@ -158,6 +220,7 @@ pub fn render_capability_table(rights: &BTreeMap<String, Right>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tpt_nexus_archon_emulator::SyscallRequest;
 
     fn set(pairs: &[(&str, Right)]) -> BTreeMap<String, Right> {
         pairs.iter().map(|(n, r)| (n.to_string(), *r)).collect()
@@ -190,5 +253,37 @@ mod tests {
         let d = capability_diff(&a, &a);
         assert!(d.is_empty());
         assert!(!d.has_strengthening());
+    }
+
+    #[test]
+    fn load_into_archon_mints_namespaced_grants() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/capability_boundary.telos"
+        ));
+        let (artifact, rights, mut emulator, pid) =
+            load_into_archon(path, None, &StaticAgent::new(), false).expect("load into archon");
+
+        assert!(artifact.all_verified(), "fixture verifies");
+        assert_eq!(rights.len(), 2, "two verified functions");
+        assert_eq!(rights.get("Ledger::settle"), Some(&Right::ReadWrite));
+        assert_eq!(
+            rights.get("Ledger::current_balance"),
+            Some(&Right::Read),
+            "read-only query earns Read"
+        );
+
+        let process = emulator.process(pid).expect("live process");
+        assert_eq!(process.grants.len(), 2, "two mints");
+        // The mutator's page must actually accept a write through the granted cap.
+        let settle_page = process.page_of("Ledger::settle").expect("settle page");
+        let written = emulator.handle_syscall(
+            pid,
+            SyscallRequest::WritePage {
+                block_id: settle_page,
+                data: b"balance=1".to_vec(),
+            },
+        );
+        assert!(written.is_ok(), "mutator grant services a write");
     }
 }

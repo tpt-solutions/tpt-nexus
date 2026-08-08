@@ -189,6 +189,31 @@ cargo run -p out-nexus-examples --example example3_compiled_artifact
 cargo test --workspace
 ```
 
+### Load a `.telos` straight into Archon from the CLI
+
+`nexus verify` runs the loop and mints the capabilities but drops the emulator
+immediately — nothing executes. `nexus run` keeps the loaded process alive and
+drives syscalls against it (stage 7), so you can watch the capability boundary
+actually hold:
+
+```text
+# Tightness gate (default): every granted right is exercised — the allowed
+# direction must succeed, the forbidden direction must be denied. Exits non-zero
+# if any grant is not tight.
+cargo run -p tpt-nexus-cli -- run examples/capability_boundary.telos
+
+# Interactive REPL: read/write/grants/quit over stdin.
+cargo run -p tpt-nexus-cli -- run examples/capability_boundary.telos --interactive
+
+# Scripted operations, same form as the REPL:
+cargo run -p tpt-nexus-cli -- run examples/capability_boundary.telos \
+    --op "read Ledger::current_balance" --op "write Ledger::settle balance=42"
+```
+
+`--policy <nexus.toml>` applies right overrides, and `--output <dir>` writes the
+attestation. The load path is shared with `nexus fuzz` via
+`tpt_nexus_cli::load_into_archon`, so minting can never drift between the two.
+
 ## Status & upstream gaps
 
 - Built directly against `tpt-telos-sdk` (the SDK telos now ships for
