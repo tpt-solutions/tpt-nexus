@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>tpt-nexus — capability playground</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        max-width: 60rem; margin: 0 auto; padding: 2rem 1rem; line-height: 1.5;
+      }
+      h1 { font-size: 1.4rem; }
+      textarea { width: 100%; min-height: 18rem; font: inherit; box-sizing: border-box; }
+      select, button { font: inherit; padding: 0.4rem 0.6rem; }
+      button { cursor: pointer; }
+      .rw { color: #b00; font-weight: 700; }
+      .r  { color: #07a; }
+      table { border-collapse: collapse; margin-top: 1rem; width: 100%; }
+      th, td { border: 1px solid currentColor; padding: 0.3rem 0.6rem; text-align: left; }
+      .err { color: #b00; white-space: pre-wrap; }
+      #status { margin-top: 0.5rem; min-height: 1.2rem; }
+    </style>
+  </head>
+  <body>
+    <h1>tpt-nexus capability playground</h1>
+    <p>
+      Paste a <code>.telos</code> source (or pick an example) and click
+      <em>Verify</em>. nexus runs the telos verify+derive half of the loop in your
+      browser and shows each function's derived capability (<code>Read</code> or
+      <code>ReadWrite</code>) — the basis for the archon grants minted at runtime.
+    </p>
+
+    <select id="examples"></select>
+    <p>
+      <textarea id="src" spellcheck="false"></textarea>
+    </p>
+    <button id="verify">Verify</button>
+    <div id="status"></div>
+    <table id="out" hidden>
+      <thead><tr><th>function</th><th>capability</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <script type="module">
+      import init, { verify_and_derive } from "./pkg/tpt_nexus_wasm.js";
+
+      const examples = ["monotonic_timestamp", "capability_boundary", "compiled_artifact"];
+
+      const sel = document.getElementById("examples");
+      const src = document.getElementById("src");
+      const status = document.getElementById("status");
+      const table = document.getElementById("out");
+      const tbody = table.querySelector("tbody");
+
+      for (const name of examples) {
+        const opt = document.createElement("option");
+        opt.value = `examples/${name}.telos`;
+        opt.textContent = name;
+        sel.appendChild(opt);
+      }
+
+      async function loadExample(path) {
+        status.textContent = `loading ${path}…`;
+        try {
+          const res = await fetch(path);
+          src.value = await res.text();
+          status.textContent = "";
+        } catch (e) {
+          status.textContent = `could not load ${path}: ${e}`;
+        }
+      }
+
+      sel.addEventListener("change", () => loadExample(sel.value));
+      await loadExample(sel.value);
+
+      await init();
+
+      document.getElementById("verify").addEventListener("click", () => {
+        table.hidden = true;
+        tbody.replaceChildren();
+        status.textContent = "verifying…";
+        let res;
+        try {
+          res = JSON.parse(verify_and_derive(src.value));
+        } catch (e) {
+          status.textContent = `wasm error: ${e}`;
+          return;
+        }
+        if (!res.ok) {
+          status.textContent = "";
+          table.hidden = false;
+          const tr = document.createElement("tr");
+          const td = document.createElement("td");
+          td.colSpan = 2;
+          td.className = "err";
+          td.textContent = res.error;
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
+        status.textContent = `ok — source_hash ${res.source_hash.slice(0, 12)}… (verified: ${res.verified})`;
+        for (const [func, right] of Object.entries(res.rights)) {
+          const tr = document.createElement("tr");
+          const f = document.createElement("td");
+          f.textContent = func;
+          const r = document.createElement("td");
+          r.textContent = right;
+          r.className = right === "ReadWrite" ? "rw" : "r";
+          tr.append(f, r);
+          tbody.appendChild(tr);
+        }
+        table.hidden = false;
+      });
+    </script>
+  </body>
+</html>

@@ -363,6 +363,7 @@ impl NexusOrchestrator {
         // [Build] Optional: real compiled bytes.
         let compiled_binary = match self.build {
             BuildPolicy::Headless => Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             BuildPolicy::Compile => {
                 log.record(NexusEvent::BuildStarted { backend: "rust" });
                 let output = match tpt_telos_sdk::compile_project_tempdir(&telos) {
@@ -386,6 +387,16 @@ impl NexusOrchestrator {
                     ));
                 }
                 bytes
+            }
+            // `cargo` does not exist on `wasm32-unknown-unknown`, so the compile
+            // path is unreachable there. The WASM entry point uses `Headless`
+            // only; this arm keeps the enum exhaustive without linking the host
+            // process API into a browser target.
+            #[cfg(target_arch = "wasm32")]
+            BuildPolicy::Compile => {
+                return Err(NexusError::Build(
+                    "compiled build is unavailable on wasm32".to_string(),
+                ));
             }
         };
 

@@ -1,0 +1,28 @@
+name: nexus verify (PR)
+
+# Dogfoods tpt-nexus on its own PRs: every changed `.telos` file is verified
+# against the real telos/archon siblings, and any capability escalation is
+# posted as a sticky PR comment (and fails the check when
+# `fail-on-strengthening` is true). The actual logic lives in the
+# `.github/actions/nexus-verify` composite action — this workflow only invokes
+# it, so downstream repos can reuse the action unchanged.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  nexus-verify:
+    name: verify changed .telos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/nexus-verify
+        with:
+          telos-ref: main
+          archon-ref: main
+          fail-on-strengthening: "true"
+          comment: "true"

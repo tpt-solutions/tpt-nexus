@@ -1,0 +1,68 @@
+name: nexus LLM self-repair demo
+
+# Demos the real-LLM self-repair loop end to end using a local Ollama model, and
+# uploads the rendered reasoning trace as a workflow artifact. Intentionally NOT
+# on push/pull_request: LLM output is non-deterministic and must not gate merges.
+#
+# Config surface (confirmed against tpt-telos's LlmAgent):
+#   NEXUS_AGENT=llm + --features llm selects the LLM agent.
+#   TELAS_LLM_PROVIDER=ollama -> http://localhost:11434/v1/chat/completions
+#   TELAS_LLM_KEY=<any placeholder> (Ollama ignores it locally)
+#   TELAS_LLM_URL / model can be left default (llama3.1).
+#
+# To make this converge within the 8-iteration cap, trial a small instruction-
+# tuned model locally first (e.g. `ollama pull llama3.2:1b` or
+# `qwen2.5:1.5b-instruct`) and confirm its replies parse as a bare
+# `mutate state { ... }` block, then lock the model into TELAS_LLM_MODEL below.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  NEXUS_AGENT: llm
+  TELAS_LLM_PROVIDER: ollama
+  TELAS_LLM_KEY: dummy
+  TELAS_LLM_MODEL: llama3.1
+
+jobs:
+  llm-trace:
+    name: run nexus trace with local Ollama
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-telos
+          path: ../tpt-telos
+      - uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-archon
+          path: ../tpt-archon
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          # Start the daemon in the background; retry until it answers.
+          nohup ollama serve > ollama.log 2>&1 &
+          for i in $(seq 1 30); do
+            if ollama list >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+      - name: Pull a small model
+        run: ollama pull "${TELAS_LLM_MODEL}"
+      - name: Build nexus with the llm feature
+        run: cargo build -p tpt-nexus-cli --features llm
+      - name: Render the reasoning trace
+        run: ./target/debug/nexus trace examples/monotonic_timestamp.telos --html
+      - name: Upload trace.html
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-reasoning-trace
+          path: nexus-out/trace.html
+          if-no-files-found: warn

@@ -29,6 +29,16 @@ verify-examples:
         cargo run -q -p tpt-nexus-cli -- verify "templates/$$t.telos"; \
     done
 
+# Adversarially fuzz every bundled example and template: prove the derived
+# capability surface is tight (allowed ops succeed, forbidden ops are denied).
+fuzz-examples:
+    for f in examples/*.telos; do \
+        cargo run -q -p tpt-nexus-cli -- fuzz "$$f"; \
+    done
+    for t in counter ledger kv_store oracle rate_limiter multi_module; do \
+        cargo run -q -p tpt-nexus-cli -- fuzz "templates/$$t.telos"; \
+    done
+
 # Build the experimental WASM browser demo (needs wasm-pack + wasm32 target).
 wasm:
     rustup target add wasm32-unknown-unknown

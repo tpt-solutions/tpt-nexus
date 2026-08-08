@@ -6,3 +6,15 @@
 /gen-project
 nexus-out/
 *.jsonl
+
+# wasm-pack output (built by CI / `just wasm` and the Pages workflow), not committed.
+/pkg
+# The excluded `tpt-nexus-wasm` crate has its own (out-of-workspace) target dir.
+crates/tpt-nexus-wasm/target/
+# GitHub Pages build staging dir assembled by .github/workflows/pages.yml.
+_site/
+
+# SARIF deltas emitted by `nexus diff --sarif` / the security-scan workflow
+# (uploaded to the Security tab, not committed).
+*.sarif
+

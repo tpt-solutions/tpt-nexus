@@ -7,14 +7,13 @@ see its derived capability surface" demo.
 > **Scope / limitations**
 >
 > This deliberately covers only the *verify → derive* half of the loop. The
-> `tpt-archon` emulator (capability minting + syscalls) cannot run in a browser,
-> and `tpt-nexus-orchestrator`'s `Compile` policy shells out to `cargo` via
-> `std::process::Command`, which does not exist on `wasm32-unknown-unknown`. So:
+> `tpt-archon` emulator (capability minting + syscalls) cannot run in a browser.
+> The orchestrator's `BuildPolicy::Compile` arm is gated behind
+> `#[cfg(not(target_arch = "wasm32"))]`, so the WASM entry point can only use
+> `BuildPolicy::Headless` (no `cargo` call, which does not exist on wasm). So:
 > 1. The WASM entry point uses `BuildPolicy::Headless` only (no `cargo` call).
-> 2. To build for wasm today you must gate the `Compile` path in
->    `tpt-nexus-orchestrator` behind `#[cfg(not(target_arch = "wasm32"))]`
->    (a small, contained change) — see `just wasm` below. The capability
->    *minting/execute* half is intentionally out of scope for the browser.
+> 2. The capability *minting/execute* half is intentionally out of scope for
+>    the browser.
 
 ## Build
 

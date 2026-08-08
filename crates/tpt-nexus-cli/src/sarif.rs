@@ -49,8 +49,20 @@ pub fn sarif_for_rights(rights: &BTreeMap<String, Right>, source: &str) -> Value
 }
 
 /// Build a SARIF document describing a capability delta between two versions.
-pub fn sarif_for_diff(delta: &CapabilityDiff) -> Value {
+///
+/// `source` is the candidate file path (`b` in a diff) used for every result's
+/// `locations` block, so GitHub's Security tab can associate each finding with
+/// the file it came from. Without it, results have no `locations` and GitHub
+/// silently drops them.
+pub fn sarif_for_diff(delta: &CapabilityDiff, source: &str) -> Value {
     let mut results: Vec<Value> = Vec::new();
+
+    let location = json!({
+        "physicalLocation": {
+            "artifactLocation": { "uri": source },
+            "region": { "startLine": 1 }
+        }
+    });
 
     for (func, right) in &delta.added {
         results.push(json!({
@@ -58,7 +70,8 @@ pub fn sarif_for_diff(delta: &CapabilityDiff) -> Value {
             "level": if *right == Right::ReadWrite { "warning" } else { "note" },
             "message": {
                 "text": format!("new capability `{}` ({})", func, right_name(*right))
-            }
+            },
+            "locations": [location]
         }));
     }
     for change in &delta.changed {
@@ -75,7 +88,8 @@ pub fn sarif_for_diff(delta: &CapabilityDiff) -> Value {
                     "capability `{}` changed {} -> {}",
                     change.func, right_name(change.from), right_name(change.to)
                 )
-            }
+            },
+            "locations": [location]
         }));
     }
     for (func, right) in &delta.removed {
@@ -84,7 +98,8 @@ pub fn sarif_for_diff(delta: &CapabilityDiff) -> Value {
             "level": "note",
             "message": {
                 "text": format!("removed capability `{}` ({})", func, right_name(*right))
-            }
+            },
+            "locations": [location]
         }));
     }
     base_sarif(results)
@@ -111,4 +126,52 @@ fn base_sarif(results: Vec<Value>) -> Value {
 /// Serialize a SARIF document to pretty JSON.
 pub fn to_string(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|e| format!("{{\"error\":{e}}}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tpt_archon_bridge::capability::Right;
+
+    fn delta_with_change() -> CapabilityDiff {
+        CapabilityDiff {
+            added: vec![("add".to_string(), Right::ReadWrite)],
+            removed: vec![("rm".to_string(), Right::Read)],
+            changed: vec![crate::RightChange {
+                func: "escalate".to_string(),
+                from: Right::Read,
+                to: Right::ReadWrite,
+            }],
+        }
+    }
+
+    #[test]
+    fn sarif_for_diff_emits_locations_on_every_result() {
+        let doc = sarif_for_diff(&delta_with_change(), "candidate.telos");
+        let results = doc["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 3, "added + removed + changed");
+        for result in results {
+            let locs = result["locations"]
+                .as_array()
+                .expect("each result has locations");
+            assert_eq!(locs.len(), 1);
+            assert_eq!(
+                locs[0]["physicalLocation"]["artifactLocation"]["uri"],
+                "candidate.telos"
+            );
+            assert_eq!(locs[0]["physicalLocation"]["region"]["startLine"], 1);
+        }
+    }
+
+    #[test]
+    fn sarif_for_diff_flags_strengthening_at_error_level() {
+        let doc = sarif_for_diff(&delta_with_change(), "candidate.telos");
+        let escalate = doc["runs"][0]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["ruleId"] == "nexus/capability/changed")
+            .unwrap();
+        assert_eq!(escalate["level"], "error");
+    }
 }

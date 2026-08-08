@@ -7,6 +7,11 @@ members = [
     "crates/tpt-nexus-cli",
     "crates/out-nexus-examples",
 ]
+# `tpt-nexus-wasm` is built explicitly via `just wasm` (wasm-pack) and must not
+# be a workspace member: it pulls in `wasm-bindgen` and targets the browser, so
+# including it would break `cargo test --workspace` and CI. Exclude it so cargo
+# in that subdir still resolves to this workspace root without claiming it.
+exclude = ["crates/tpt-nexus-wasm"]
 # Crate naming convention, inherited from the sibling `tpt-telos` / `tpt-archon`
 # workspaces: crates intended for crates.io are prefixed `tpt-nexus-`; crates
 # that exist only to demonstrate or exercise the others are prefixed

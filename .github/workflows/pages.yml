@@ -1,0 +1,64 @@
+name: GitHub Pages
+
+# Builds the experimental WASM browser playground and publishes it to GitHub
+# Pages. The playground lives in `site/` (a static HTML page) plus `pkg/` (the
+# wasm-pack output of `crates/tpt-nexus-wasm`). Deployed via the
+# `actions/upload-pages-artifact` + `actions/deploy-pages` pair.
+#
+# NOTE: this repo's Pages source must be set to "GitHub Actions" once, manually,
+# in Settings -> Pages. The deploy job fails until that is done.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build playground
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-telos
+          path: ../tpt-telos
+      - uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-archon
+          path: ../tpt-archon
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+      - name: Build WASM bundle into pkg/
+        run: wasm-pack build crates/tpt-nexus-wasm --target web --out-dir ../../pkg
+      - name: Assemble _site/
+        run: |
+          mkdir -p _site/pkg
+          cp site/index.html _site/
+          cp -r pkg/* _site/pkg/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

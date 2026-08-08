@@ -437,4 +437,107 @@ differentiators. Tracked here so nothing regresses to "looks done, isn't."
     `../tpt-archon` path deps with crates.io/git versions and produce a
     publishable build.
 
+---
+
+## 13. Proof-of-concept demos (session 4) — visibility + CI dogfooding
+
+Everything in §1–§12 is built and green, but most of it is only provable by
+cloning three repos and running the CLI yourself. This section tracks 5 PoCs
+that make the tooling visible (a browser demo, CI surfaces that actually run
+on this repo's own PRs) rather than just documented as available for others to
+adopt. Repo is confirmed public, so GitHub Pages + SARIF upload both work on
+the free tier. Full design rationale in the approved plan
+(`i-want-to-build-eventual-umbrella.md`); this section is the execution
+checklist. Build order: 13.4 → 13.2 → 13.3 → 13.1 → 13.5.
+
+### 13.1 Browser playground on GitHub Pages
+
+- [x] Run `rustup target add wasm32-unknown-unknown && cargo install wasm-pack
+      && just wasm` locally first to confirm which (if either) of the two
+      blockers below actually fire, then fix only what's real. → Confirmed:
+      `just wasm` (wasm-pack) builds clean once both blockers below were fixed.
+- [x] Root `Cargo.toml`: add `exclude = ["crates/tpt-nexus-wasm"]` to
+      `[workspace]` if `just wasm` hits a workspace-membership error
+      (`tpt-nexus-wasm` isn't in `members` and has no `[workspace]` of its own).
+      → `exclude` added; verified `wasm-pack build` resolves the workspace root.
+- [x] `crates/tpt-nexus-orchestrator/src/orchestrator.rs`: gate the
+      `BuildPolicy::Compile` arm behind `#[cfg(not(target_arch = "wasm32"))]`
+      (it shells out to `cargo`, which doesn't exist on `wasm32-unknown-unknown`);
+      return a `NexusError` under `#[cfg(target_arch = "wasm32")]` instead.
+- [x] `.gitignore`: add `/pkg` (wasm-pack output, built by CI, not committed).
+- [x] `site/index.html`: a `.telos` textarea (dropdown of `examples/*.telos`),
+      "Verify" button, calls `verify_and_derive` via
+      `<script type="module">` importing `./pkg/tpt_nexus_wasm.js`, renders the
+      returned `{ok, source_hash, verified, rights}` as a table.
+- [x] `.github/workflows/pages.yml`: build `tpt-nexus-wasm` + siblings, assemble
+      `_site/` (site + `pkg/`), `upload-pages-artifact` + `deploy-pages`
+      (`pages: write`, `id-token: write`).
+- [ ] Manual, one-time, not scriptable: repo Settings → Pages → Source →
+      "GitHub Actions" — flag to the user, deploy job fails without it.
+
+### 13.2 Dogfooded CI security gate
+
+- [x] `.github/workflows/nexus-verify-pr.yml`: run the existing
+      `.github/actions/nexus-verify` composite action on `pull_request` — it
+      is fully built but nothing in this repo currently calls it.
+      `permissions: pull-requests: write`.
+- [x] `docs/dogfood-demo.md`: documented, reproducible recipe for opening a
+      scratch-branch PR that adds a `mutate state` block to a read-only
+      function, to produce the sticky-comment/failed-check screenshot on
+      demand — not a permanent broken example in `examples/`.
+
+### 13.3 Supply-chain attack narrative + SARIF → Security tab
+
+- [x] `crates/tpt-nexus-cli/src/sarif.rs`: fix `sarif_for_diff` — it previously
+      emitted no `locations` field on any result (unlike `sarif_for_rights`),
+      so findings wouldn't associate with a file in GitHub's Security tab.
+      Threaded a `source: &str` param through and added a `locations` block
+      (`region.startLine: 1`) to every result; covered by unit tests.
+- [x] `crates/tpt-nexus-cli/src/main.rs`: update the `diff()` call site
+      (~line 521) to pass the candidate path `b`; existing `sarif_for_diff`
+      tests updated for the new signature.
+- [x] `examples/supply_chain_before.telos` / `supply_chain_after.telos`: new
+      narrative pair (heavily commented, in the style of
+      `capability_boundary.telos`) — an innocuous-looking "refactor" that
+      silently turns a read-only query into a state mutator. Distinct from
+      the existing terse `diff_demo_before/after` README pair.
+- [x] `.github/workflows/nexus-security-scan.yml`: `nexus diff ... --sarif` on
+      the new pair, upload via `github/codeql-action/upload-sarif@v3`
+      (`security-events: write`, its own workflow so the permission isn't
+      granted repo-wide via `ci.yml`).
+
+### 13.4 Adversarial fuzz gate
+
+- [x] `justfile`: `fuzz-examples` recipe, mirrors `verify-examples` — loops
+      `nexus fuzz` over every `examples/*.telos` and `templates/*.telos`.
+- [x] `.github/workflows/ci.yml`: new `fuzz-examples` job (sibling to
+      `verify-examples`, same checkout-siblings + inline-commands style).
+- [x] Verify `just fuzz-examples` actually passes locally against the real
+      sibling crates. → Ran the full `examples/*.telos` + `templates/*` fuzz
+      loop locally: `TOTAL FAILURES=0` (allowed ops succeed, forbidden ops
+      denied, randomized pass matches the `Right`).
+
+### 13.5 Real-LLM self-repair demo via local Ollama in CI
+
+Config surface confirmed by reading `../tpt-telos/crates/tpt-telos-agent/src/llm_agent.rs`
+directly: `NEXUS_AGENT=llm` + `--features llm`, `TELAS_LLM_PROVIDER=ollama`
+(defaults to `http://localhost:11434/v1/chat/completions`, model `llama3.1`,
+no `TELAS_LLM_URL` override needed), `TELAS_LLM_KEY=<any placeholder>`. Also
+confirmed (via `../tpt-telos/crates/tpt-telos-agent/src/lib.rs`'s
+`transpile_func`) that `examples/monotonic_timestamp.telos` cannot be
+one-shot by any agent — its body is present, not elided, so iteration 0 always
+tries the file's own wrong body first regardless of agent — so it's reused
+as-is with no new/harder example needed.
+
+- [x] `.github/workflows/nexus-llm-demo.yml`: `workflow_dispatch` only (+
+      optional weekly `schedule`) — not on `push`/`pull_request`, since LLM
+      output is non-deterministic and must not gate merges. Installs Ollama,
+      pulls a small model, builds `nexus --features llm`, runs
+      `nexus trace examples/monotonic_timestamp.telos --html`, uploads
+      `trace.html` as a workflow artifact. `timeout-minutes: ~20`.
+- [ ] Trial a small instruction-tuned model locally first (e.g. `llama3.2:1b`
+      or `qwen2.5:1.5b-instruct`) to confirm it converges within the loop's
+      8-iteration cap and its replies parse as a bare `mutate state { ... }`
+      block before locking a model choice into the CI workflow.
+
 

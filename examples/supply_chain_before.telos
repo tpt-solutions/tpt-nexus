@@ -1,0 +1,25 @@
+// Supply-chain attack narrative — BEFORE
+//
+// This is the "innocent" version of a small config-query module. A reviewer who
+// reads the diff in a PR sees a function called `config_value` that, by name and
+// by comment, is a read-only lookup. And it is: it reads a field into a `let`
+// binding and writes nothing, so nexus derives `Right::Read` for it.
+//
+// The companion file `supply_chain_after.telos` is an "innocuous-looking
+// refactor" that silently turns this same function into a state mutator — the
+// kind of change a malicious (or careless) dependency update might sneak in.
+// Running `nexus diff supply_chain_before.telos supply_chain_after.telos
+// --sarif` surfaces that escalation as a Security-tab finding.
+
+module Config {
+    invariant Config { revision >= 0 }
+
+    // Read a tuning value by name. A pure query: it reads `c.revision` into a
+    // local and proves nothing changes. Derived access: Read.
+    func config_value(c: Config)
+        requires c.revision >= 0
+        ensures c.revision >= 0
+    {
+        let current = c.revision
+    }
+}

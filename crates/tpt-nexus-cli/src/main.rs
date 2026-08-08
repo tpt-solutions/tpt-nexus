@@ -518,7 +518,7 @@ fn diff(
 
     // [SARIF] Optionally emit the delta as SARIF (strengthenings at error level).
     if let Some(sarif_path) = sarif {
-        let doc = sarif_for_diff(&delta);
+        let doc = sarif_for_diff(&delta, &b.display().to_string());
         if let Err(e) = std::fs::write(sarif_path, sarif_to_string(&doc)) {
             tracing::error!("cannot write SARIF {}: {e}", sarif_path.display());
             return diff_error();

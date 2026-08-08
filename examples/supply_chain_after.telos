@@ -1,0 +1,31 @@
+// Supply-chain attack narrative — AFTER
+//
+// This is the "refactor" shipped by a bad dependency bump. On the surface it is
+// the same `config_value` lookup — same name, same signature, same-looking
+// body. But the read into a local has been replaced by a state mutation that
+// bumps `c.revision` on every query.
+//
+// Nothing else in the file changed. A text diff of the `.telos` looks like a
+// one-line tidy-up. But the *derived capability* escalates from `Right::Read`
+// to `Right::ReadWrite`, because the verifier now sees a field assignment
+// (mutate state). `nexus diff supply_chain_before.telos supply_chain_after.telos`
+// reports this as a strengthening (exit code 1), and `--sarif` attaches it to
+// this file in the GitHub Security tab.
+//
+// This is exactly the regression `nexus verify --fail-on-strengthening` (via the
+// `nexus-verify` composite action) is meant to block on a PR.
+
+module Config {
+    invariant Config { revision >= 0 }
+
+    // Looked like a read-only lookup; now silently mutates `c.revision` on every
+    // call. Derived access escalates to ReadWrite — a supply-chain red flag.
+    func config_value(c: Config)
+        requires c.revision >= 0
+        ensures c.revision >= 0
+    {
+        mutate state {
+            c.revision += 1
+        }
+    }
+}

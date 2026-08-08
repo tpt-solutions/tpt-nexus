@@ -54,6 +54,29 @@ jobs:
           cargo run -q -p tpt-nexus-cli -- verify examples/capability_boundary.telos
           cargo run -q -p tpt-nexus-cli -- verify examples/compiled_artifact.telos --compile
 
+  fuzz-examples:
+    name: nexus fuzz on examples + templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-telos
+          path: ../tpt-telos
+      - uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-archon
+          path: ../tpt-archon
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fuzz the derived capability surface of every example and template
+        run: |
+          for f in examples/*.telos; do
+            cargo run -q -p tpt-nexus-cli -- fuzz "$f"
+          done
+          for t in counter ledger kv_store oracle rate_limiter multi_module; do
+            cargo run -q -p tpt-nexus-cli -- fuzz "templates/$t.telos"
+          done
+
   # Guard against silent drift between this harness and the siblings it builds
   # against. Each matrix entry pins a (telos, archon) ref pair and a Rust
   # toolchain; if a bump breaks the integration, this job fails before the change

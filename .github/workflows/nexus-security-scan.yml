@@ -1,0 +1,46 @@
+name: nexus security scan
+
+# Uploads a SARIF capability-surface delta to the GitHub Security tab. The delta
+# is produced by `nexus diff supply_chain_before.telos supply_chain_after.telos
+# --sarif`: a supply-chain "refactor" that silently escalates a read-only query
+# into a state mutator shows up as a `nexus/capability/changed` finding at the
+# `error` level, attached to the offending file.
+#
+# This workflow is intentionally separate from `ci.yml` so the
+# `security-events: write` permission is not granted repo-wide.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  sarif:
+    name: capability delta -> Security tab
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-telos
+          path: ../tpt-telos
+      - uses: actions/checkout@v4
+        with:
+          repository: TPT-Org/tpt-archon
+          path: ../tpt-archon
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Diff the supply-chain narrative pair to SARIF
+        run: |
+          cargo run -q -p tpt-nexus-cli -- \
+            diff examples/supply_chain_before.telos examples/supply_chain_after.telos \
+            --sarif examples/supply_chain_delta.sarif
+      - name: Upload SARIF to code-scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: examples/supply_chain_delta.sarif
+          category: nexus-capability-delta
