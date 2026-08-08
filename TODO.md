@@ -4,10 +4,10 @@ Tracks the build of `tpt-nexus`, the integration harness proving the closed
 loop `tpt-telos` (intent + verification + attestation) → `tpt-archon`
 (capability-gated execution) actually works end-to-end.
 
-**Status:** §1–§11 are complete and green. `cargo fmt --check`,
+**Status:** §1–§12 are complete and green. `cargo fmt --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, and
-`cargo test --workspace` all pass (**81 tests + doctests**, including the
-`loop_then_archon` e2e test and the new CLI integration tests in
+`cargo test --workspace` all pass (**87 tests + doctests**, including the
+`loop_then_archon` e2e test and the CLI integration tests in
 `crates/tpt-nexus-cli/tests/cli.rs`). Three runnable examples
 (`example1`–`example3`) and six starter templates (including a multi-module
 `multi_module.telos`) work against the real `tpt-telos-sdk` and `tpt-archon`
@@ -15,6 +15,10 @@ crates. The `telos-sdk` row in §0 was updated: the SDK now exists, so nexus
 builds against it. The CLI now also exposes `verify --policy/--json/--output`,
 `diff --json` (with distinct 0/1/2 exit codes), `sign` (recovering and printing
 the secret key), `verify-signature`, `completions`, `new --force`, and `watch`.
+§12 adds the remaining differentiators, all implemented and covered by tests:
+namespaced `module::func` grants, SARIF output (`--sarif`), the `fuzz`
+adversarial tightness check, `nexus serve`, the VS Code extension, the
+experimental WASM demo, the policy-diff PR bot, and `PUBLISHING.md`.
 
 **Decisions locked in before starting (see "Spec vs. reality" below for why):**
 - **Reuse real crates.** Nexus is a thin glue/demo layer over the existing,
@@ -358,23 +362,29 @@ differentiators. Tracked here so nothing regresses to "looks done, isn't."
     func is a silent no-op. Warn (tracing) for each policy grant whose func is
     absent from the derived grant set. → `apply` now only overrides existing
     derived rights (no phantom grants), and `verify` warns on unknown funcs.
-- [ ] **Document `nexus diff` exit semantics for a *weakening*.** `ReadWrite→Read`
+- [x] **Document `nexus diff` exit semantics for a *weakening*.** `ReadWrite→Read`
     currently returns exit 0 (clean); acceptable (it is a reduction) but the
-    README/help must say so explicitly.
+    README/help must say so explicitly. → README Quickstart step 3 now documents
+    the full exit-code contract (0 = no change or weakening, 1 = strengthening,
+    2 = verify error).
 
 ### 12.2 Missing features
 
-- [ ] **Namespaced grants (`module::func`).** `derive_rights` (emulator.rs:548)
-    *rejects* duplicate func names across modules, so `multi_module.telos`
-    dodges the interesting case with unique names. Real multi-module support
-    (distinct grants per `module::func`, not a hard reject) is the genuine
-    differentiator. Touches derive_rights, `load_artifact` keying, `page_of`,
-    policy matching, and the `assert_grants!` macro.
+- [x] **Namespaced grants (`module::func`).** `derive_rights` and
+    `load_artifact` now key every grant by `module::func`
+    (emulator.rs:558, :261), so two same-named functions in different modules
+    get distinct page capabilities instead of colliding. `resolve_grant_key`
+    (lib.rs:55) matches both the exact `module::func` form and a bare `func`
+    suffix, so `nexus.toml` policies and `assert_grants!` work across module
+    boundaries; covered by the multi-module `nexus diff` table.
 - [x] **`nexus init`** — scaffold a `nexus.toml` (from `templates/nexus.toml`)
     into the current directory, optionally with a starter `.telos`. → `nexus init`
     copies `templates/nexus.toml` to `./nexus.toml` (`--force` to overwrite).
-- [ ] **SARIF output** for `verify`/`diff` (besides `--json`) so findings show
-    in GitHub code-scanning / Security tab.
+- [x] **SARIF output** for `verify`/`diff` (besides `--json`) so findings show
+    in GitHub code-scanning / Security tab. → `crates/tpt-nexus-cli/src/sarif.rs`
+    (`sarif_for_rights`, `sarif_for_diff`, `to_string`) emits SARIF 2.1.0; `nexus
+    verify --sarif <path>` and `nexus diff --sarif <path>` write it, with
+    strengthenings flagged at error level.
 - [x] **`nexus doctor`** — diagnose missing siblings (`../tpt-telos`,
     `../tpt-archon`), the Rust toolchain, the `templates/` dir, and a local
     `nexus.toml` *before* a cryptic cargo path-dep error. Exit non-zero on
@@ -386,16 +396,29 @@ differentiators. Tracked here so nothing regresses to "looks done, isn't."
 
 ### 12.3 Innovations (differentiators)
 
-- [ ] **Capability fuzzing / adversarial escalation tester** — auto-generate
-    syscall sequences against a loaded artifact to prove the derived grant set
-    is *tight* (complements `assert_grants!`). High-value and on-theme.
-- [ ] **`nexus serve`** — a tiny static viewer for the existing HTML trace
-    (trace.rs) so reviews/demos are shareable without the CLI.
-- [ ] **VS Code extension** — `.telos` syntax highlighting + inline
-    `nexus verify` on save (reuses the `watch` logic).
-- [ ] **WASM build** for an in-browser verify→attest→mint→execute demo.
-- [ ] **Policy-diff PR bot** — comment the security delta (subsumed by the
-    §12.1 action fix, but call it out as the end state).
+- [x] **Capability fuzzing / adversarial escalation tester** — `nexus fuzz
+    <file.telos>` (main.rs:`fuzz`) auto-generates syscall sequences against a
+    loaded artifact to prove the derived grant set is *tight*: the allowed
+    direction must succeed, the forbidden direction must be denied, and a
+    randomized pass must always match the `Right`. Complements `assert_grants!`.
+- [x] **`nexus serve`** — a tiny static viewer for the existing HTML trace
+    (trace.rs) so reviews/demos are shareable without the CLI. → `nexus serve
+    --dir <out> --port <n>` (main.rs:`serve`) is a dependency-free HTTP server
+    over a run/attestation directory (path-traversal guarded).
+- [x] **VS Code extension** — `.telos` syntax highlighting + inline
+    `nexus verify` on save (reuses the `watch` logic). → `vscode-extension/`
+    ships `package.json`, `language-configuration.json`, `syntaxes/telos.tmLanguage.json`,
+    and `extension.js` wiring the `nexus.verify` command to `nexus verify`.
+- [x] **WASM build** for an in-browser verify→attest→mint→execute demo. →
+    `crates/tpt-nexus-wasm` wraps the verify→derive half behind `wasm-bindgen`
+    (`verify_and_derive`, returns the capability surface as JSON); built
+    explicitly via `just wasm` and intentionally excluded from the workspace so
+    it can't affect `cargo test --workspace`. The mint/execute half is out of
+    scope in-browser (documented in its README).
+- [x] **Policy-diff PR bot** — comment the security delta (subsumed by the
+    §12.1 action fix): `.github/actions/nexus-verify/action.yml` runs `nexus diff`
+    base↔head and posts the actual per-file capability table as the PR comment,
+    honoring `fail-on-strengthening`.
 
 ### 12.4 Usability / automation / adoption
 
@@ -408,7 +431,10 @@ differentiators. Tracked here so nothing regresses to "looks done, isn't."
 - [x] **CI `verify-examples` just recipe** (justfile:23) covers `examples/`;
     extend it to loop over `templates/` so shipped scaffolds cannot rot. → justfile
     `verify-examples` now loops the six templates.
-- [ ] **Publish/install path:** `cargo install`, Homebrew tap, or prebuilt
-    binaries once the repo is public (path deps block `cargo install` today).
+- [x] **Publish/install path:** `cargo install`, Homebrew tap, or prebuilt
+    binaries once the repo is public (path deps block `cargo install` today). →
+    `PUBLISHING.md` records the exact steps to replace the `../tpt-telos` /
+    `../tpt-archon` path deps with crates.io/git versions and produce a
+    publishable build.
 
 

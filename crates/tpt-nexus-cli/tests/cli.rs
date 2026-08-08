@@ -379,7 +379,10 @@ fn verify_emits_sarif_for_code_scanning() {
     assert!(sarif_path.is_file(), "SARIF file written");
 
     let sarif = std::fs::read_to_string(&sarif_path).unwrap();
-    assert!(sarif.contains("\"version\": \"2.1.0\""), "SARIF 2.1.0 document");
+    assert!(
+        sarif.contains("\"version\": \"2.1.0\""),
+        "SARIF 2.1.0 document"
+    );
     assert!(sarif.contains("\"runs\""), "SARIF has runs");
     assert!(
         sarif.contains("nexus/capability"),

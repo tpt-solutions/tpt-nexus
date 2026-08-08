@@ -14,12 +14,12 @@
 //!   before a build, so path-dep failures are caught early.
 //! * `watch <file.telos>` — re-verify a file whenever it changes on disk.
 
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::net::TcpListener;
 
-use rand::Rng;
 use rand::rngs::StdRng;
+use rand::Rng;
 use rand::SeedableRng;
 
 use clap::{CommandFactory, Parser};
@@ -39,12 +39,14 @@ fn diff_error() -> ExitCode {
     ExitCode::from(2)
 }
 
-use tpt_nexus_archon_emulator::{derive_rights, ArchonEmulator, ArchonError, Grant, SyscallRequest};
+use tpt_nexus_archon_emulator::{
+    derive_rights, ArchonEmulator, ArchonError, Grant, SyscallRequest,
+};
 use tpt_nexus_cli::{
     capability_diff, render_capability_table, render_trace_html, render_trace_markdown,
-    resolve_grant_key, run_and_derive, select_agent, sarif::{
-        sarif_for_diff, sarif_for_rights, to_string as sarif_to_string,
-    }, signing, Policy,
+    resolve_grant_key, run_and_derive,
+    sarif::{sarif_for_diff, sarif_for_rights, to_string as sarif_to_string},
+    select_agent, signing, Policy,
 };
 
 /// tpt-nexus: close the loop between tpt-telos (verified intent) and tpt-archon
@@ -82,6 +84,13 @@ enum Command {
         sarif: Option<PathBuf>,
     },
     /// Show the capability delta between two `.telos` sources.
+    ///
+    /// Exit-code contract (matches `nexus-validate-manifest`'s 0/1/2 scheme):
+    ///   0 = clean: no capability change, OR a *weakening* (a right was reduced,
+    ///       e.g. `ReadWrite` → `Read` — a safe reduction, never a regression).
+    ///   1 = security regression: a capability was strengthened (a new
+    ///       `ReadWrite` or any escalation — treat as a supply-chain alert).
+    ///   2 = error: one side could not be verified.
     Diff {
         /// Baseline version (e.g. the committed file).
         a: PathBuf,
@@ -191,16 +200,16 @@ fn main() -> ExitCode {
             require_signature,
             sig,
             sarif,
-        } => verify(
-            &path,
+        } => verify(VerifyOpts {
+            path: &path,
             compile,
-            policy.as_deref(),
-            output.as_deref(),
+            policy_path: policy.as_deref(),
+            output: output.as_deref(),
             json,
-            require_signature.as_deref(),
-            sig.as_deref(),
-            sarif.as_deref(),
-        ),
+            require_signature: require_signature.as_deref(),
+            sig: sig.as_deref(),
+            sarif: sarif.as_deref(),
+        }),
         Command::Diff { a, b, json, sarif } => diff(&a, &b, json, sarif.as_deref()),
         Command::Fuzz { path, iterations } => fuzz(&path, iterations),
         Command::Serve { dir, port } => serve(&dir, port),
@@ -226,16 +235,30 @@ fn main() -> ExitCode {
     }
 }
 
-fn verify(
-    path: &std::path::Path,
+/// Bundled options for [`verify`], kept in one struct so the CLI entry point
+/// stays under the clippy `too-many-arguments` budget as flags grow.
+struct VerifyOpts<'a> {
+    path: &'a std::path::Path,
     compile: bool,
-    policy_path: Option<&std::path::Path>,
-    output: Option<&std::path::Path>,
+    policy_path: Option<&'a std::path::Path>,
+    output: Option<&'a std::path::Path>,
     json: bool,
-    require_signature: Option<&str>,
-    sig: Option<&std::path::Path>,
-    sarif: Option<&std::path::Path>,
-) -> ExitCode {
+    require_signature: Option<&'a str>,
+    sig: Option<&'a std::path::Path>,
+    sarif: Option<&'a std::path::Path>,
+}
+
+fn verify(opts: VerifyOpts) -> ExitCode {
+    let VerifyOpts {
+        path,
+        compile,
+        policy_path,
+        output,
+        json,
+        require_signature,
+        sig,
+        sarif,
+    } = opts;
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -466,7 +489,12 @@ fn sign(manifest: &std::path::Path, secret_key: Option<&str>) -> ExitCode {
     }
 }
 
-fn diff(a: &std::path::Path, b: &std::path::Path, json: bool, sarif: Option<&std::path::Path>) -> ExitCode {
+fn diff(
+    a: &std::path::Path,
+    b: &std::path::Path,
+    json: bool,
+    sarif: Option<&std::path::Path>,
+) -> ExitCode {
     // Exit-code contract (matches `nexus-validate-manifest`):
     //   0 = clean (no capability change)
     //   1 = security regression (a capability was strengthened)
@@ -991,7 +1019,9 @@ fn fuzz(path: &std::path::Path, iterations: usize) -> ExitCode {
     // forbidden direction (if any) must be denied.
     for g in &grants {
         let allowed = if g.right.allows_read() {
-            SyscallRequest::ReadPage { block_id: g.block_id }
+            SyscallRequest::ReadPage {
+                block_id: g.block_id,
+            }
         } else {
             SyscallRequest::WritePage {
                 block_id: g.block_id,
@@ -1011,7 +1041,9 @@ fn fuzz(path: &std::path::Path, iterations: usize) -> ExitCode {
                 data: vec![0u8; 4],
             })
         } else if !g.right.allows_read() {
-            Some(SyscallRequest::ReadPage { block_id: g.block_id })
+            Some(SyscallRequest::ReadPage {
+                block_id: g.block_id,
+            })
         } else {
             None
         };
@@ -1041,7 +1073,9 @@ fn fuzz(path: &std::path::Path, iterations: usize) -> ExitCode {
                 data: random_vec(&mut rng, 16),
             }
         } else {
-            SyscallRequest::ReadPage { block_id: g.block_id }
+            SyscallRequest::ReadPage {
+                block_id: g.block_id,
+            }
         };
         let allowed = if write {
             g.right.allows_write()
@@ -1092,7 +1126,10 @@ fn serve(dir: &std::path::Path, port: u16) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    println!("nexus serve: http://127.0.0.1:{port}/  (serving {})", dir.display());
+    println!(
+        "nexus serve: http://127.0.0.1:{port}/  (serving {})",
+        dir.display()
+    );
     println!("ctrl-c to stop");
     for stream in listener.incoming() {
         match stream {
@@ -1119,7 +1156,11 @@ fn serve_one(stream: &mut std::net::TcpStream, dir: &std::path::Path) {
         .unwrap_or("/")
         .trim_start_matches('/')
         .to_string();
-    let rel = if path.is_empty() { "index.html".to_string() } else { path };
+    let rel = if path.is_empty() {
+        "index.html".to_string()
+    } else {
+        path
+    };
 
     // Resolve within `dir` and reject traversal outside it.
     let target = dir.join(&rel);
@@ -1148,7 +1189,9 @@ fn write_status(stream: &mut std::net::TcpStream, status: &str, content_type: &s
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    let _ = stream.write_all(header.as_bytes()).and_then(|_| stream.write_all(body));
+    let _ = stream
+        .write_all(header.as_bytes())
+        .and_then(|_| stream.write_all(body));
 }
 
 /// Guess a content type from a file extension (only what we serve).
