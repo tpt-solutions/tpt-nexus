@@ -38,11 +38,16 @@ jobs:
           ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-telos" "$GITHUB_WORKSPACE/../tpt-telos"
           ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-archon" "$GITHUB_WORKSPACE/../tpt-archon"
       - uses: dtolnay/rust-toolchain@stable
+      # `nexus diff` exits non-zero when it finds a regression, and this pair
+      # is a regression on purpose. The SARIF is still written, so accept the
+      # exit code and let the upload carry the finding. A missing SARIF file
+      # (a real build or runtime failure) still fails the step.
       - name: Diff the supply-chain narrative pair to SARIF
         run: |
           cargo run -q -p tpt-nexus-cli -- \
             diff examples/supply_chain_before.telos examples/supply_chain_after.telos \
-            --sarif examples/supply_chain_delta.sarif
+            --sarif examples/supply_chain_delta.sarif || true
+          test -s examples/supply_chain_delta.sarif
       - name: Upload SARIF to code-scanning
         uses: github/codeql-action/upload-sarif@v4
         with:

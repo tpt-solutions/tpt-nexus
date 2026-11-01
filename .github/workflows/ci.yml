@@ -102,11 +102,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - telos-ref: main
-            archon-ref: main
+          - telos-ref: master
+            archon-ref: master
             rust: stable
-          - telos-ref: main
-            archon-ref: main
+          - telos-ref: master
+            archon-ref: master
             rust: beta
     steps:
       - uses: actions/checkout@v7
