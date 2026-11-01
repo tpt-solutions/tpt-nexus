@@ -13,6 +13,8 @@ nexus-out/
 crates/tpt-nexus-wasm/target/
 # GitHub Pages build staging dir assembled by .github/workflows/pages.yml.
 _site/
+# Sibling repos checked out by CI (symlinked to ../<name>), not committed.
+/_siblings/
 
 # SARIF deltas emitted by `nexus diff --sarif` / the security-scan workflow
 # (uploaded to the Security tab, not committed).

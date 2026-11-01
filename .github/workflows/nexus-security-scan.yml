@@ -24,15 +24,19 @@ jobs:
     name: capability delta -> Security tab
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-telos
-          path: ../tpt-telos
-      - uses: actions/checkout@v4
+          path: _siblings/tpt-telos
+      - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-archon
-          path: ../tpt-archon
+          path: _siblings/tpt-archon
+      - name: Link sibling repos
+        run: |
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-telos" "$GITHUB_WORKSPACE/../tpt-telos"
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-archon" "$GITHUB_WORKSPACE/../tpt-archon"
       - uses: dtolnay/rust-toolchain@stable
       - name: Diff the supply-chain narrative pair to SARIF
         run: |

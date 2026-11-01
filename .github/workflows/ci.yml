@@ -9,21 +9,27 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+# Sibling repos are checked out inside the workspace (actions/checkout refuses
+# paths outside $GITHUB_WORKSPACE), then symlinked to ../<name> so the
+# `../tpt-telos` and `../tpt-archon` path dependencies resolve as they do locally.
 jobs:
   quality:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Check out sibling repos (tpt-telos, tpt-archon)
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-telos
-          path: ../tpt-telos
+          path: _siblings/tpt-telos
       - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-archon
-          path: ../tpt-archon
+          path: _siblings/tpt-archon
+      - name: Link sibling repos
+        run: |
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-telos" "$GITHUB_WORKSPACE/../tpt-telos"
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-archon" "$GITHUB_WORKSPACE/../tpt-archon"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -42,11 +48,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-telos
-          path: ../tpt-telos
+          path: _siblings/tpt-telos
       - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-archon
-          path: ../tpt-archon
+          path: _siblings/tpt-archon
+      - name: Link sibling repos
+        run: |
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-telos" "$GITHUB_WORKSPACE/../tpt-telos"
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-archon" "$GITHUB_WORKSPACE/../tpt-archon"
       - uses: dtolnay/rust-toolchain@stable
       - name: Verify example .telos files
         run: |
@@ -58,15 +68,19 @@ jobs:
     name: nexus fuzz on examples + templates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-telos
-          path: ../tpt-telos
-      - uses: actions/checkout@v4
+          path: _siblings/tpt-telos
+      - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-archon
-          path: ../tpt-archon
+          path: _siblings/tpt-archon
+      - name: Link sibling repos
+        run: |
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-telos" "$GITHUB_WORKSPACE/../tpt-telos"
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-archon" "$GITHUB_WORKSPACE/../tpt-archon"
       - uses: dtolnay/rust-toolchain@stable
       - name: Fuzz the derived capability surface of every example and template
         run: |
@@ -100,12 +114,19 @@ jobs:
         with:
           repository: TPT-Org/tpt-telos
           ref: ${{ matrix.telos-ref }}
-          path: ../tpt-telos
+          path: _siblings/tpt-telos
       - uses: actions/checkout@v7
         with:
           repository: TPT-Org/tpt-archon
           ref: ${{ matrix.archon-ref }}
-          path: ../tpt-archon
-      - uses: dtolnay/rust-toolchain@${{ matrix.rust }}
+          path: _siblings/tpt-archon
+      - name: Link sibling repos
+        run: |
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-telos" "$GITHUB_WORKSPACE/../tpt-telos"
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-archon" "$GITHUB_WORKSPACE/../tpt-archon"
+      # `uses:` does not accept expressions, so the toolchain is an input instead.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
       - name: Test against pinned siblings
         run: cargo test --workspace
