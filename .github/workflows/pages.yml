@@ -10,7 +10,7 @@ name: GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -27,15 +27,19 @@ jobs:
     name: build playground
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: tpt-solutions/tpt-telos
-          path: ../tpt-telos
-      - uses: actions/checkout@v4
+          path: _siblings/tpt-telos
+      - uses: actions/checkout@v7
         with:
           repository: tpt-solutions/tpt-archon
-          path: ../tpt-archon
+          path: _siblings/tpt-archon
+      - name: Link sibling repos
+        run: |
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-telos" "$GITHUB_WORKSPACE/../tpt-telos"
+          ln -sfn "$GITHUB_WORKSPACE/_siblings/tpt-archon" "$GITHUB_WORKSPACE/../tpt-archon"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
