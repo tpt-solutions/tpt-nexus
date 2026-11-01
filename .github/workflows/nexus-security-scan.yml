@@ -40,7 +40,7 @@ jobs:
             diff examples/supply_chain_before.telos examples/supply_chain_after.telos \
             --sarif examples/supply_chain_delta.sarif
       - name: Upload SARIF to code-scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: examples/supply_chain_delta.sarif
           category: nexus-capability-delta
