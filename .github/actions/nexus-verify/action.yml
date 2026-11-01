@@ -41,14 +41,14 @@ runs:
     - name: Check out sibling tpt-telos
       uses: actions/checkout@v4
       with:
-        repository: TPT-Org/tpt-telos
+        repository: tpt-solutions/tpt-telos
         ref: ${{ inputs.telos-ref }}
         path: ../tpt-telos
 
     - name: Check out sibling tpt-archon
       uses: actions/checkout@v4
       with:
-        repository: TPT-Org/tpt-archon
+        repository: tpt-solutions/tpt-archon
         ref: ${{ inputs.archon-ref }}
         path: ../tpt-archon
 
